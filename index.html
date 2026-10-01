@@ -355,22 +355,47 @@ function genToken(){var a=new Uint8Array(16);(window.crypto||window.msCrypto).ge
 function bridgeCode(){
   var g=S.set.cal;if(!g.token){g.token=genToken();save()}
   return ['// Tréninky: čtení Google Kalendáře (jen pro čtení)','const TOKEN = "'+g.token+'";','',
-  'function doGet(e) {','  const p = (e && e.parameter) || {};','  if (p.t !== TOKEN) return out_({ ok: false, error: "token" });',
+  'function doGet(e) {','  const p = (e && e.parameter) || {};','  const out = function (o) {','    const json = JSON.stringify(o);',
+  '    if (p.cb && /^[A-Za-z0-9_]+$/.test(p.cb)) {','      return ContentService.createTextOutput(p.cb + "(" + json + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);','    }',
+  '    return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);','  };',
+  '  if (p.t !== TOKEN) return out({ ok: false, error: "token" });',
   '  const from = Number(p.from) || Date.now() - 120 * 864e5;','  const to = Number(p.to) || Date.now() + 60 * 864e5;',
   '  const events = CalendarApp.getDefaultCalendar().getEvents(new Date(from), new Date(to))','    .filter(function (ev) { return !ev.isAllDayEvent(); })',
   '    .map(function (ev) {','      return {','        id: ev.getId() + "_" + ev.getStartTime().getTime(),','        title: ev.getTitle(),','        start: ev.getStartTime().getTime(),','        end: ev.getEndTime().getTime(),',
   '        guests: ev.getGuestList().map(function (g) {','          return { email: g.getEmail(), name: g.getName(), status: String(g.getGuestStatus()) };','        })','      };','    })',
-  '    .filter(function (ev) { return ev.guests.length > 0; });','  return out_({ ok: true, me: Session.getEffectiveUser().getEmail(), events: events });','}','',
-  'function out_(o) {','  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);','}'].join('\n');
+  '    .filter(function (ev) { return ev.guests.length > 0; });','  return out({ ok: true, me: Session.getEffectiveUser().getEmail(), events: events });','}'].join('\n');
+}
+var GC_TIMEOUT=20000;
+function gcCheck(j){
+  if(!j||j.ok!==true){var e=new Error(j&&j.error==='token'?'Špatný token. Zkopíruj kód z aplikace znovu a nasaď novou verzi.':'Odpověď není z tvého skriptu.');e.final=true;throw e}
+  return j;
+}
+function gcViaFetch(u){
+  var ctl=window.AbortController?new AbortController():null,timer=setTimeout(function(){if(ctl)ctl.abort()},GC_TIMEOUT);
+  var opt={credentials:'omit'};if(ctl)opt.signal=ctl.signal;
+  return fetch(u,opt).then(function(r){clearTimeout(timer);return r.json()},function(e){clearTimeout(timer);throw e}).then(gcCheck);
+}
+/* Záložní cesta bez omezení prohlížeče: odpověď se načte jako skript (JSONP). */
+function gcViaJsonp(u){
+  return new Promise(function(res,rej){
+    var cb='gcb'+Date.now()+Math.floor(Math.random()*1e6),sc=document.createElement('script'),done=false,t;
+    function end(){done=true;clearTimeout(t);try{delete window[cb]}catch(e){window[cb]=undefined}if(sc.parentNode)sc.parentNode.removeChild(sc)}
+    window[cb]=function(j){if(done)return;end();try{res(gcCheck(j))}catch(e){rej(e)}};
+    t=setTimeout(function(){if(done)return;end();rej(new Error('bez odpovědi'))},GC_TIMEOUT);
+    sc.onerror=function(){if(done)return;end();rej(new Error('skript se nenačetl'))};
+    sc.src=u+'&cb='+cb;
+    document.head.appendChild(sc);
+  });
 }
 function gcFetch(url,token,from,to){
   var u=url+(url.indexOf('?')<0?'?':'&')+'t='+encodeURIComponent(token)+'&from='+from+'&to='+to;
-  var ctl=window.AbortController?new AbortController():null,timer=setTimeout(function(){if(ctl)ctl.abort()},25000);
-  return fetch(u,ctl?{signal:ctl.signal}:{}).then(function(r){clearTimeout(timer);return r.json()},function(){clearTimeout(timer);throw new Error('Bez internetu, nebo adresa není správná.')})
-   .then(function(j){
-     if(!j||j.ok!==true)throw new Error(j&&j.error==='token'?'Špatný token. Zkopíruj kód z aplikace znovu a nasaď novou verzi.':'Odpověď není z tvého skriptu.');
-     return j;
-   },function(e){throw new Error(e&&e.message&&e.message.indexOf('Bez internetu')===0?e.message:'Odpověď není z tvého skriptu. Zkontroluj adresu.')});
+  return gcViaFetch(u).catch(function(e1){
+    if(e1&&e1.final)throw e1;
+    return gcViaJsonp(u).catch(function(e2){
+      if(e2&&e2.final)throw e2;
+      throw new Error('Spojení s Googlem se nepovedlo. Zkopíruj kód z aplikace znovu, vlož ho do skriptu a nasaď novou verzi. ('+((e1&&e1.message)||e1)+' / '+((e2&&e2.message)||e2)+')');
+    });
+  });
 }
 var gcBusy=false;
 /* Stáhne události z kalendáře, nahradí staré a zapíše proběhlé tréninky podle e-mailů hostů. */
@@ -601,7 +626,7 @@ function settingsView(){
   h+='<h2>Fakturace</h2><div class="card"><div class="kv"><span>Fakturační údaje</span><span class="chip '+(billingReady()?'ok':'wait')+'">'+(billingReady()?'vyplněno':'chybí')+'</span></div><button class="act" data-a="billSet">Upravit fakturační údaje</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.0</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.1</div>';
   return h;
 }
 
@@ -841,7 +866,11 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden){run
 setInterval(function(){if(document.hidden||$('sheet').innerHTML)return;if(S.set.cal.url){gcSync(false)}else{var n=runAll();if(n)render()}},300000);
 try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
 runAll();render();gcSync(false);
-if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})})}
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){
+  var hadCtl=!!navigator.serviceWorker.controller,reloaded=false;
+  navigator.serviceWorker.addEventListener('controllerchange',function(){if(hadCtl&&!reloaded){reloaded=true;location.reload()}});
+  window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
+}
 </script>
 </body>
 </html>
