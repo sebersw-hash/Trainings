@@ -156,10 +156,10 @@ var num=function(v){var n=Number(String(v).replace(',','.'));return isFinite(n)?
 var money=function(n){var p=(Math.round(n*100)/100).toFixed(2).split('.');return p[0].replace(/\B(?=(\d{3})+(?!\d))/g,'\u00a0')+','+p[1]+'\u00a0Kč'};
 
 /* ---------- data ---------- */
-function blank(){return {v:1,clients:[],events:[],mails:[],invoices:[],set:{trainer:'',b:{name:'',address:'',ico:'',dic:'',account:'',vat:false,dueDays:14,price:0,note:'',qr:true},cal:{url:'',token:'',last:0,err:'',me:'',ignore:[]},theme:{style:'clean',accent:'indigo',bg:'blue'},ui:{group:'package'}}}}
+function blank(){return {v:1,clients:[],events:[],mails:[],invoices:[],set:{trainer:'',b:{name:'',address:'',ico:'',dic:'',account:'',vat:false,dueDays:14,price:0,note:'',qr:true},cal:{url:'',token:'',last:0,err:'',me:'',ignore:[]},theme:{style:'clean',accent:'indigo',bg:'blue'},ui:{group:'package'},mc:{}}}}
 function loadState(){try{var j=JSON.parse(localStorage.getItem(KEY));if(j&&j.clients)return j}catch(e){}return blank()}
 var S=loadState();
-function ensureCal(){S.set=S.set||blank().set;S.set.b=Object.assign(blank().set.b,S.set.b||{});S.set.cal=Object.assign(blank().set.cal,S.set.cal||{});S.set.theme=Object.assign({style:'clean',accent:'indigo',bg:'blue'},S.set.theme||{});S.set.ui=Object.assign({group:'package'},S.set.ui||{})}
+function ensureCal(){S.set=S.set||blank().set;S.set.b=Object.assign(blank().set.b,S.set.b||{});S.set.cal=Object.assign(blank().set.cal,S.set.cal||{});S.set.theme=Object.assign({style:'clean',accent:'indigo',bg:'blue'},S.set.theme||{});S.set.ui=Object.assign({group:'package'},S.set.ui||{});S.set.mc=S.set.mc||{}}
 ensureCal();
 /* ---------- barevné motivy ---------- */
 var ACC={
@@ -272,10 +272,24 @@ function revokeByCancelled(list){
   });
   return n;
 }
+/* Ruční zrušení: událost se označí jako zrušená (nikomu se nezapočítá), pamatuje se i po dalším načtení kalendáře. */
+function cancelEvent(id,why){
+  var ev=S.events.filter(function(e){return e.id===id})[0];if(!ev)return 0;
+  why=why||'zrušeno ručně';S.set.mc[id]={why:why,at:Date.now()};ev.cancelled=true;ev.why=why;
+  return revokeByCancelled([ev]);
+}
+function restoreEvent(id){
+  delete S.set.mc[id];
+  var ev=S.events.filter(function(e){return e.id===id})[0];if(ev){ev.cancelled=false;delete ev.why}
+}
+function eventOf(c,x){
+  return S.events.filter(function(e){return e.attendees.indexOf(c.email)>=0&&(e.id===x.key||Math.abs(e.start-x.date)<=300000)})[0];
+}
 function sync(){
   var t=Date.now(),n=0,from=t-120*DAY,done={};
   S.clients.forEach(function(c){c.log.forEach(function(e){if(e.kind==='Trénink')done[e.key+'|'+c.email]=1})});
   S.events.slice().sort(function(a,b){return a.start-b.start}).forEach(function(ev){
+    if(S.set.mc[ev.id]&&!ev.cancelled){ev.cancelled=true;ev.why=S.set.mc[ev.id].why}
     if(ev.cancelled||ev.end>t||ev.start<from)return;
     ev.attendees.forEach(function(em){
       var c=S.clients.find(function(x){return x.email===em&&x.active});
@@ -309,7 +323,7 @@ function monthCancelled(c,M){
 function cancelledOf(c){var now=Date.now();return S.events.filter(function(e){return e.cancelled&&e.attendees.indexOf(c.email)>=0&&e.start>=Math.max(now-120*DAY,c.trackFrom)}).sort(function(a,b){return b.start-a.start})}
 function cancelledSection(c){
   var l=cancelledOf(c);if(!l.length)return '';
-  return '<h2>Zrušené tréninky</h2><div class="card">'+l.map(function(e){return '<div class="hist"><div><div style="text-decoration:line-through">'+esc(e.title)+'</div><div class="sub">'+when(e.start)+' · '+esc(e.why||'zrušeno')+'</div></div><span class="chip bad">Zrušeno</span></div>'}).join('')+'</div>';
+  return '<h2>Zrušené tréninky</h2><div class="card">'+l.map(function(e){return '<div class="hist"><div><div style="text-decoration:line-through">'+esc(e.title)+'</div><div class="sub">'+when(e.start)+' · '+esc(e.why||'zrušeno')+'</div></div><span style="display:flex;align-items:center;gap:4px"><span class="chip bad">Zrušeno</span><button class="ic" style="font-size:13px;padding:4px 6px" data-a="evOpen" data-id="'+esc(e.id)+'">Detail</button></span></div>'}).join('')+'</div>';
 }
 function monthStatsFor(c,M,carryOverride){
   var E=mAdd(M,1),cur=mStart(Date.now()),carryIn=0,paid=0,other=0,done=0,keys={};
@@ -431,8 +445,8 @@ function importIcs(text){
   S.clients.forEach(function(c){known[c.email]=1});
   inst.forEach(function(e){
     var all=e.attendees.concat(e.declined.filter(function(x){return e.attendees.indexOf(x)<0}));
-    if(e.cancelled||e.declined.length){
-      canc.push({id:e.id,title:e.title,start:e.start,end:e.end,attendees:all,why:e.cancelled?'zrušen':'odmítl: '+e.declined.join(', '),src:'ics',cancelled:true});
+    if(e.cancelled||e.declined.length||S.set.mc[e.id]){
+      canc.push({id:e.id,title:e.title,start:e.start,end:e.end,attendees:all,why:S.set.mc[e.id]?S.set.mc[e.id].why:(e.cancelled?'zrušen':'odmítl: '+e.declined.join(', ')),src:'ics',cancelled:true});
       return;
     }
     good.push(e);
@@ -557,7 +571,8 @@ function gcApply(j){
     if(String(e.myStatus||'')==='NO')no.push('trenér');
     if(!att.length)return;
     var ev={id:id,title:e.title||'Trénink',start:e.start,end:e.end,attendees:att,names:names,src:'google'};
-    if(no.length){ev.cancelled=true;ev.why='odmítl: '+no.join(', ');canc.push(ev)}
+    if(S.set.mc[id]){ev.cancelled=true;ev.why=S.set.mc[id].why;canc.push(ev)}
+    else if(no.length){ev.cancelled=true;ev.why='odmítl: '+no.join(', ');canc.push(ev)}
     else att.forEach(function(a){valid[id+'|'+a]=1});
     evs.push(ev);
   });
@@ -757,10 +772,10 @@ function monthCard(c){
   var now=Date.now();
   st.evs.forEach(function(e){
     var logged=!!st.keys[e.id],past=e.end<=now;
-    h+='<div class="hist"><div><div>'+esc(e.title)+'</div><div class="sub">'+when(e.start)+'</div></div>'+(logged?'<span class="chip ok">Odtrénováno</span>':past?'<span class="chip wait">Čeká na zápis</span>':'<span class="chip">Naplánováno</span>')+'</div>';
+    h+='<div class="hist"><div><div>'+esc(e.title)+'</div><div class="sub">'+when(e.start)+'</div></div>'+'<span style="display:flex;align-items:center;gap:4px">'+(logged?'<span class="chip ok">Odtrénováno</span>':past?'<span class="chip wait">Čeká na zápis</span>':'<span class="chip">Naplánováno</span>')+'<button class="ic" style="font-size:13px;padding:4px 6px" data-a="evOpen" data-id="'+esc(e.id)+'">Zrušit</button></span></div>';
   });
   manual.forEach(function(e){h+='<div class="hist"><div><div>Ručně zapsaný trénink</div><div class="sub">'+when(e.date)+'</div></div><span class="chip ok">Odtrénováno</span></div>'});
-  st.canc.forEach(function(e){h+='<div class="hist"><div><div style="text-decoration:line-through">'+esc(e.title)+'</div><div class="sub">'+when(e.start)+' · '+esc(e.why||'zrušeno')+'</div></div><span class="chip bad">Zrušeno</span></div>'});
+  st.canc.forEach(function(e){h+='<div class="hist"><div><div style="text-decoration:line-through">'+esc(e.title)+'</div><div class="sub">'+when(e.start)+' · '+esc(e.why||'zrušeno')+'</div></div><span style="display:flex;align-items:center;gap:4px"><span class="chip bad">Zrušeno</span><button class="ic" style="font-size:13px;padding:4px 6px" data-a="evOpen" data-id="'+esc(e.id)+'">Detail</button></span></div>'});
   c.log.filter(function(e){return String(e.key).indexOf('rev_')===0&&effMonth(e)===R.month&&!st.canc.some(function(v){return Math.abs(v.start-e.date)<=300000})}).forEach(function(e){
     var mm=/^Nezapočítáno \((.*?)\): (.*)$/.exec(e.note||'')||[0,'zrušen',e.note];
     h+='<div class="hist"><div><div>'+esc(mm[2])+'</div><div class="sub">'+when(e.date)+' · '+esc(mm[1])+'</div></div><span class="chip bad">Nezapočítáno</span></div>';
@@ -788,7 +803,7 @@ function detailView(){
   h+='<h2>Historie</h2><div class="card">';
   var hist=c.log.slice().sort(function(a,b){return b.date-a.date}).slice(0,60);
   if(!hist.length)h+='<div class="kv sub">Zatím žádné záznamy.</div>';
-  hist.forEach(function(e){h+='<div class="hist"><div><div>'+esc(e.note||e.kind)+'</div><div class="sub">'+dd(e.date)+' · '+e.kind+'</div></div><b class="'+(e.delta>0?'pos':'')+'">'+(e.delta>0?'+':'')+e.delta+'</b></div>'});
+  hist.forEach(function(e){h+='<div class="hist"><div><div>'+esc(e.note||e.kind)+'</div><div class="sub">'+dd(e.date)+' · '+e.kind+'</div></div><span style="display:flex;align-items:center;gap:6px">'+(e.kind==='Trénink'?'<button class="ic" style="font-size:13px;padding:4px 8px" data-a="trOpen" data-k="'+esc(e.key)+'" data-d="'+e.date+'">Zrušit</button>':'')+'<b class="'+(e.delta>0?'pos':'')+'">'+(e.delta>0?'+':'')+e.delta+'</b></span></div>'});
   return h+'</div>';
 }
 
@@ -812,7 +827,7 @@ function calView(){
     var names=e.attendees.map(function(em){var c=S.clients.find(function(x){return x.email===em});return c?c.name:em}).join(', ');
     var past=e.end<=t,isL=logged[e.id];
     var tag=e.cancelled?'<span class="evt" style="background:var(--bad-bg);color:var(--red)">Zrušeno</span>':(!past?'':(isL?'<span class="evt">Zapsáno</span>':'<span class="evt">Bez klienta</span>'));
-    h+='<div class="ev'+(past||e.cancelled?' past':'')+'" style="--c:'+(first?clr(first.email):'#64748b')+'"><div class="evr"><div style="min-width:0"><div class="et"'+(e.cancelled?' style="text-decoration:line-through"':'')+'>'+esc(e.title)+'</div><div class="es">'+tt(e.start)+' – '+tt(e.end)+' · '+esc(names)+(e.cancelled&&e.why?' · '+esc(e.why):'')+'</div></div><div class="evc">'+tag+'<button class="evx" data-a="delEvent" data-id="'+esc(e.id)+'" aria-label="Smazat událost">'+IC.x+'</button></div></div></div>';
+    h+='<div class="ev'+(past||e.cancelled?' past':'')+'" data-a="evOpen" data-id="'+esc(e.id)+'" style="cursor:pointer;--c:'+(first?clr(first.email):'#64748b')+'"><div class="evr"><div style="min-width:0"><div class="et"'+(e.cancelled?' style="text-decoration:line-through"':'')+'>'+esc(e.title)+'</div><div class="es">'+tt(e.start)+' – '+tt(e.end)+' · '+esc(names)+(e.cancelled&&e.why?' · '+esc(e.why):'')+'</div></div><div class="evc">'+tag+'<button class="evx" data-a="delEvent" data-id="'+esc(e.id)+'" aria-label="Smazat událost">'+IC.x+'</button></div></div></div>';
   });
   return h+(open?'</div></div>':'');
 }
@@ -851,7 +866,7 @@ function settingsView(){
   h+='<h2>Fakturace</h2><div class="card"><div class="kv"><span>Fakturační údaje</span><span class="chip '+(billingReady()?'ok':'wait')+'">'+(billingReady()?'vyplněno':'chybí')+'</span></div><button class="act" data-a="billSet">Upravit fakturační údaje</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.6</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.7</div>';
   return h;
 }
 
@@ -870,6 +885,25 @@ function render(){
   $('tabs').innerHTML=tabs.map(function(t){return '<button data-a="tab" data-t="'+t[0]+'" class="'+(R.tab===t[0]?'on':'')+'"><span class="pl">'+ti[t[0]]+(t[0]==='mail'&&pend?'<span class="badge">'+pend+'</span>':'')+'</span><span>'+t[1]+'</span></button>'}).join('');
   $('fab').innerHTML=(R.tab==='clients'&&!R.client)?fabBtn('newClient','Klient'):(R.tab==='cal'?fabBtn('newEvent','Událost'):'');
   window.scrollTo(0,y);
+}
+function evSheet(id){
+  var ev=S.events.filter(function(e){return e.id===id})[0];if(!ev){toast('Událost nenalezena.');return}
+  var names=ev.attendees.map(function(em){var c=S.clients.filter(function(x){return x.email===em})[0];return c?c.name:em}).join(', ');
+  var mc=S.set.mc[id],h='<h3>'+esc(ev.title)+'</h3><div class="sub" style="margin:0 4px 6px">'+when(ev.start)+' – '+tt(ev.end)+'</div><div class="sub" style="margin:0 4px 12px">Účastníci: '+esc(names)+'</div>';
+  if(ev.cancelled){
+    h+='<div class="card"><div class="kv"><span>Stav</span><span class="chip bad">Zrušeno</span></div><div class="kv sub">'+esc(ev.why||'zrušeno')+'. Trénink se nikomu nepočítá.</div></div>';
+    if(mc)h+='<button class="pri" data-a="evRestore" data-id="'+esc(id)+'">Obnovit trénink</button>';
+    else h+='<div class="sub" style="margin:0 4px">Zrušení vzniklo v kalendáři (odmítnutí nebo smazání). Změníš ho tam, nebo můžeš trénink ručně obnovit.</div><button class="pri" data-a="evRestore" data-id="'+esc(id)+'">Obnovit ručně</button>';
+  }else{
+    h+='<div class="sub" style="margin:0 4px 4px;line-height:1.5">Zrušení platí pro všechny v události: trénink se nikomu nezapočítá a vrátí se kredity.</div><button class="pri" data-a="evCancel" data-id="'+esc(id)+'">Zrušit trénink (nikomu nezapočítat)</button>';
+  }
+  openSheet(h+'<button class="ghost" data-a="closeSheet">Zavřít</button>');
+}
+function trSheet(cid,key,date){
+  var c=cl(cid),x=c&&c.log.filter(function(e){return e.kind==='Trénink'&&String(e.key)===key&&String(e.date)===date})[0];if(!x){toast('Záznam nenalezen.');return}
+  var ev=eventOf(c,x);
+  if(ev){evSheet(ev.id);return}
+  openSheet('<h3>Zrušit trénink?</h3><div class="sub" style="margin:0 4px 12px;line-height:1.5">'+esc(c.name)+' · '+when(x.date)+'<br>K tomuto zápisu není událost v kalendáři. Zápis se odebere a vrátí se jeden kredit.</div><button class="pri" data-a="trRemove" data-c="'+esc(cid)+'" data-k="'+esc(key)+'" data-d="'+esc(date)+'">Odebrat trénink</button><button class="ghost" data-a="closeSheet">Zavřít</button>');
 }
 function orphSheet(cid){
   var list=orphansAll().filter(function(o){return !cid||o.c.id===cid}).sort(function(a,b){return b.x.date-a.x.date});
@@ -1010,6 +1044,13 @@ function act(a,el){
     case 'accent':S.set.theme.accent=d.v;save();break;
     case 'bgcol':S.set.theme.bg=d.v;save();break;
     case 'orph':orphSheet(d.c);return;
+    case 'evOpen':evSheet(d.id);return;
+    case 'trOpen':trSheet(R.client,d.k,d.d);return;
+    case 'evCancel':var nc=cancelEvent(d.id,'zrušeno ručně');save();closeSheet();toast('Trénink zrušen. Odebráno zápisů: '+nc+'.');break;
+    case 'evRestore':restoreEvent(d.id);runAll();save();closeSheet();toast('Trénink obnoven.');break;
+    case 'trRemove':
+      var tc=cl(d.c),tx=tc&&tc.log.filter(function(e){return e.kind==='Trénink'&&String(e.key)===d.k&&String(e.date)===d.d})[0];
+      if(tx&&revokeTraining(tc,tx,'zrušeno ručně')){save();closeSheet();toast('Trénink odebrán, kredit vrácen.')}else closeSheet();break;
     case 'orphDo':
       var rm=orphPick(true),nrm=0;rm.forEach(function(o){if(revokeTraining(o.c,o.x,'zrušen nebo odmítnut (není v kalendáři)'))nrm++});
       save();closeSheet();toast(nrm?'Odebráno tréninků: '+nrm+'. Kredit se vrátil.':'Nic se neodebralo.');break;
