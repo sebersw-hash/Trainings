@@ -237,6 +237,16 @@ function mailMonthly(c,d,planned,carry,toPay){
   enqueue(c.email,'Tréninky na '+m+' – k úhradě '+trainings(toPay),b);
 }
 
+/* Trénink, který byl zrušen nebo odmítnut (klientem i trenérem), se nepočítá: kredit se vrátí a čekající e-mail se smaže. */
+function revokeTraining(c,x,why){
+  var i=c.log.indexOf(x);if(i<0)return false;
+  c.log.splice(i,1);
+  c.log.push({date:x.date,delta:0,kind:'Úprava',key:'rev_'+x.key,note:'Nezapočítáno ('+why+'): '+(x.note||'trénink')});
+  var subj='Trénink zapsán ('+dd(x.date)+')';
+  /* smaže se jen jeden čekající e-mail (v týž den může být tréninků víc) */
+  for(var k=0;k<S.mails.length;k++){var m=S.mails[k];if(m.to===c.email&&!m.sent&&m.subject===subj){S.mails.splice(k,1);break}}
+  return true;
+}
 function sync(){
   var t=Date.now(),n=0,from=t-120*DAY,done={};
   S.clients.forEach(function(c){c.log.forEach(function(e){if(e.kind==='Trénink')done[e.key+'|'+c.email]=1})});
@@ -319,7 +329,7 @@ function parseIcs(text){
   text=text.replace(/\r?\n[ \t]/g,'');
   var evs=[],cur=null;
   text.split(/\r?\n/).forEach(function(l){
-    if(l==='BEGIN:VEVENT'){cur={ex:[],att:[],names:{}};return}
+    if(l==='BEGIN:VEVENT'){cur={ex:[],att:[],dec:[],names:{}};return}
     if(l==='END:VEVENT'){if(cur)evs.push(cur);cur=null;return}
     if(!cur)return;
     var i=l.indexOf(':');if(i<0)return;
@@ -336,7 +346,8 @@ function parseIcs(text){
     else if(name==='ORGANIZER')cur.org=val.replace(/^mailto:/i,'').toLowerCase();
     else if(name==='ATTENDEE'){
       var em=val.replace(/^mailto:/i,'').toLowerCase().trim();
-      if(!em||em.indexOf('resource.calendar')>=0||pr.CUTYPE==='RESOURCE'||pr.PARTSTAT==='DECLINED')return;
+      if(!em||em.indexOf('resource.calendar')>=0||pr.CUTYPE==='RESOURCE')return;
+      if(pr.PARTSTAT==='DECLINED'){cur.dec.push(em);return}
       cur.att.push(em);if(pr.CN)cur.names[em]=pr.CN;
     }
   });
@@ -365,32 +376,49 @@ function expand(evs,from,to){
   var over={},out=[];
   evs.forEach(function(e){if(e.rid)over[e.uid+'|'+e.rid]=1});
   evs.forEach(function(e){
-    if(e.allday||e.cancelled||!e.start||!e.att.length)return;
+    if(e.allday||!e.start)return;
+    if(!e.cancelled&&!e.att.length&&!e.dec.length)return;
     var dur=(e.end&&e.end>e.start)?e.end-e.start:36e5;
     var starts=(!e.rrule||e.rid)?[e.start]:genRule(e,to);
     starts.forEach(function(st){
       if(st<from||st>to)return;
-      if(!e.rid&&(over[e.uid+'|'+st]||e.ex.indexOf(st)>=0))return;
-      out.push({id:(e.uid||uid())+'_'+st,title:e.title||'Trénink',start:st,end:st+dur,attendees:e.att.slice(),names:e.names,org:e.org||'',src:'ics'});
+      var id=(e.uid||uid())+'_'+st,base={id:id,title:e.title||'Trénink',start:st,end:st+dur,attendees:e.att.slice(),declined:e.dec.slice(),names:e.names,org:e.org||'',src:'ics'};
+      if(!e.rid&&(over[e.uid+'|'+st]||e.ex.indexOf(st)>=0)){base.cancelled=true;out.push(base);return}
+      base.cancelled=!!e.cancelled;
+      base.trainerDeclined=!!(e.org&&e.dec.indexOf(e.org)>=0);
+      out.push(base);
     });
   });
   return out;
 }
 function importIcs(text){
-  var now=Date.now(),inst=expand(parseIcs(text),now-120*DAY,now+60*DAY),have={},added=0,known={},org={},found={};
+  var now=Date.now(),inst=expand(parseIcs(text),now-120*DAY,now+60*DAY),have={},added=0,known={},org={},found={},bad={},good=[];
   S.events.forEach(function(e){have[e.id]=1});
   S.clients.forEach(function(c){known[c.email]=1});
   inst.forEach(function(e){
-    if(e.org)org[e.org]=1;
-    if(!have[e.id]){S.events.push({id:e.id,title:e.title,start:e.start,end:e.end,attendees:e.attendees,src:'ics'});have[e.id]=1;added++}
+    if(e.cancelled||e.trainerDeclined){bad[e.id]=e.cancelled?'zrušen':'odmítnut trenérem';return}
+    e.declined.forEach(function(em){bad[e.id+'|'+em]='odmítnut klientem'});
+    good.push(e);
   });
-  inst.forEach(function(e){e.attendees.forEach(function(a){
+  good.forEach(function(e){
+    if(e.org)org[e.org]=1;
+    if(!have[e.id]&&e.attendees.length){S.events.push({id:e.id,title:e.title,start:e.start,end:e.end,attendees:e.attendees,src:'ics'});have[e.id]=1;added++}
+  });
+  good.forEach(function(e){e.attendees.forEach(function(a){
     if(known[a]||org[a])return;
     var o=found[a]||(found[a]={email:a,name:e.names[a]||'',count:0});o.count++;
   })});
+  /* zrušené a odmítnuté události už se do plánu nepočítají a započítané tréninky se odeberou */
+  S.events=S.events.filter(function(e){return !bad[e.id]});
+  S.events.forEach(function(e){e.attendees=e.attendees.filter(function(a){return !bad[e.id+'|'+a]})});
+  S.events=S.events.filter(function(e){return e.attendees.length});
+  var revoked=0;
+  S.clients.forEach(function(c){
+    c.log.filter(function(x){return x.kind==='Trénink'&&(bad[x.key]||bad[x.key+'|'+c.email])}).forEach(function(x){if(revokeTraining(c,x,bad[x.key]||bad[x.key+'|'+c.email]))revoked++});
+  });
   var list=Object.keys(found).map(function(k){return found[k]}).sort(function(a,b){return b.count-a.count});
   var n=runAll();
-  return {total:inst.length,added:added,recorded:n,found:list};
+  return {total:good.length,added:added,recorded:n,found:list,revoked:revoked};
 }
 
 /* ---------- Google Kalendář (automatické načítání) ---------- */
@@ -398,10 +426,11 @@ function genToken(){var a=new Uint8Array(16);(window.crypto||window.msCrypto).ge
 function bridgeCode(){
   var g=S.set.cal;if(!g.token){g.token=genToken();save()}
   return ['// Tréninky: čtení Google Kalendáře (jen pro čtení)','const TOKEN = "'+g.token+'";','',
+  'function my_(ev) {','  try { return String(ev.getMyStatus()); } catch (x) { return ""; }','}','',
   'function data_(p) {','  if (p.t !== TOKEN) return { ok: false, error: "token" };',
   '  const from = Number(p.from) || Date.now() - 120 * 864e5;','  const to = Number(p.to) || Date.now() + 60 * 864e5;',
   '  const events = CalendarApp.getDefaultCalendar().getEvents(new Date(from), new Date(to))','    .filter(function (ev) { return !ev.isAllDayEvent(); })',
-  '    .map(function (ev) {','      return {','        id: ev.getId() + "_" + ev.getStartTime().getTime(),','        title: ev.getTitle(),','        start: ev.getStartTime().getTime(),','        end: ev.getEndTime().getTime(),',
+  '    .map(function (ev) {','      return {','        myStatus: my_(ev),','        id: ev.getId() + "_" + ev.getStartTime().getTime(),','        title: ev.getTitle(),','        start: ev.getStartTime().getTime(),','        end: ev.getEndTime().getTime(),',
   '        guests: ev.getGuestList().map(function (g) {','          return { email: g.getEmail(), name: g.getName(), status: String(g.getGuestStatus()) };','        })','      };','    })',
   '    .filter(function (ev) { return ev.guests.length > 0; });','  return { ok: true, me: Session.getEffectiveUser().getEmail(), events: events };','}','',
   'function doGet(e) {','  const p = (e && e.parameter) || {};','  const json = JSON.stringify(data_(p));',
@@ -483,27 +512,35 @@ function gcB64(s){
 var gcBusy=false;
 /* Stáhne události z kalendáře, nahradí staré a zapíše proběhlé tréninky podle e-mailů hostů. */
 function gcApply(j){
-  var g=S.set.cal,now=Date.now(),from=now-120*DAY,to=now+60*DAY,me=String(j.me||'').toLowerCase(),evs=[];
+  var g=S.set.cal,now=Date.now(),from=now-120*DAY,to=now+60*DAY,me=String(j.me||'').toLowerCase(),evs=[],valid={},why={};
   j.events.forEach(function(e){
-    var att=[],names={};
+    var id='g_'+e.id,att=[],names={};
     (e.guests||[]).forEach(function(x){
       var em=String(x.email||'').toLowerCase().trim();
-      if(!em||em===me||em.indexOf('resource.calendar')>=0||x.status==='NO')return;
+      if(!em||em===me||em.indexOf('resource.calendar')>=0)return;
+      if(x.status==='NO'){why[id+'|'+em]='odmítnut klientem';return}
       att.push(em);if(x.name)names[em]=x.name;
     });
-    if(att.length)evs.push({id:'g_'+e.id,title:e.title||'Trénink',start:e.start,end:e.end,attendees:att,names:names,src:'google'});
+    if(String(e.myStatus||'')==='NO'){att.forEach(function(a){why[id+'|'+a]='odmítnut trenérem'});return}
+    if(att.length){evs.push({id:id,title:e.title||'Trénink',start:e.start,end:e.end,attendees:att,names:names,src:'google'});att.forEach(function(a){valid[id+'|'+a]=1})}
   });
   S.events=S.events.filter(function(e){return e.src!=='google'||e.start<from||e.start>to}).concat(evs);
+  /* už započítaný trénink, který byl mezitím zrušen, smazán nebo odmítnut (klientem i trenérem), se odebere */
+  var revoked=0;
+  if(j.events.length)S.clients.forEach(function(c){
+    c.log.filter(function(x){return x.kind==='Trénink'&&String(x.key).indexOf('g_')===0&&x.date>=from&&x.date<=now&&!valid[x.key+'|'+c.email]})
+      .forEach(function(x){if(revokeTraining(c,x,why[x.key+'|'+c.email]||'zrušen nebo smazán z kalendáře'))revoked++});
+  });
   g.me=me;g.last=Date.now();g.err='';
   var n=runAll();
-  return {n:n,total:evs.length};
+  return {n:n,total:evs.length,revoked:revoked};
 }
 function gcSync(manual){
   var g=S.set.cal;if(!g.url||!g.token||gcBusy)return Promise.resolve(null);
   gcBusy=true;
   var now=Date.now();
   return gcFetch(g.url,g.token,now-120*DAY,now+60*DAY).then(gcApply).catch(function(e){g.err=e.message||'Nepodařilo se načíst kalendář.';save();if(manual)toast(g.err);return null})
-   .then(function(res){gcBusy=false;render();return res});
+   .then(function(res){gcBusy=false;render();if(res&&res.revoked)toast('Odebráno tréninků (zrušené nebo odmítnuté): '+res.revoked);return res});
 }
 /* Hosté z Google Kalendáře, kteří ještě nejsou klienti. */
 function gcFound(){
@@ -676,13 +713,17 @@ function monthCard(c){
   h+='</div>';
   var manual=c.log.filter(function(e){return e.kind==='Trénink'&&String(e.key).indexOf('manual_')===0&&effMonth(e)===R.month});
   h+='<h2>Tréninky v měsíci</h2><div class="card">';
-  if(!st.evs.length&&!manual.length)h+='<div class="kv sub">V tomto měsíci nejsou žádné tréninky.</div>';
+  if(!st.evs.length&&!manual.length&&!c.log.some(function(e){return String(e.key).indexOf('rev_')===0&&effMonth(e)===R.month}))h+='<div class="kv sub">V tomto měsíci nejsou žádné tréninky.</div>';
   var now=Date.now();
   st.evs.forEach(function(e){
     var logged=!!st.keys[e.id],past=e.end<=now;
     h+='<div class="hist"><div><div>'+esc(e.title)+'</div><div class="sub">'+when(e.start)+'</div></div>'+(logged?'<span class="chip ok">Odtrénováno</span>':past?'<span class="chip wait">Čeká na zápis</span>':'<span class="chip">Naplánováno</span>')+'</div>';
   });
   manual.forEach(function(e){h+='<div class="hist"><div><div>Ručně zapsaný trénink</div><div class="sub">'+when(e.date)+'</div></div><span class="chip ok">Odtrénováno</span></div>'});
+  c.log.filter(function(e){return String(e.key).indexOf('rev_')===0&&effMonth(e)===R.month}).forEach(function(e){
+    var mm=/^Nezapočítáno \((.*?)\): (.*)$/.exec(e.note||'')||[0,'zrušen',e.note];
+    h+='<div class="hist"><div><div>'+esc(mm[2])+'</div><div class="sub">'+when(e.date)+' · '+esc(mm[1])+'</div></div><span class="chip bad">Nezapočítáno</span></div>';
+  });
   return h+'</div>';
 }
 
@@ -766,7 +807,7 @@ function settingsView(){
   h+='<h2>Fakturace</h2><div class="card"><div class="kv"><span>Fakturační údaje</span><span class="chip '+(billingReady()?'ok':'wait')+'">'+(billingReady()?'vyplněno':'chybí')+'</span></div><button class="act" data-a="billSet">Upravit fakturační údaje</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.3</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.4</div>';
   return h;
 }
 
@@ -803,7 +844,7 @@ function icsSheet(res){
   if(!res){
     h+='<div class="sub" style="margin:0 4px 10px;line-height:1.5">1. V Google Kalendáři na webu: Nastavení, Import a export, Exportovat.<br>2. Rozbal stažený ZIP v aplikaci Soubory.<br>3. Vyber soubor .ics tady. Tréninky, hosté a opakování se načtou, 120 dní zpět a 60 dní dopředu.</div><div class="card"><div class="kv"><input type="file" id="icsFile" accept=".ics,text/calendar,text/plain" multiple style="max-width:100%;text-align:left"></div></div><div class="err" id="icsErr"></div><button class="ghost" data-a="closeSheet">Zavřít</button>';
   }else{
-    h+='<div class="sub" style="margin:0 4px 8px">Načteno událostí: '+res.total+', nových: '+res.added+'. Zapsáno tréninků: '+res.recorded+'.</div>';
+    h+='<div class="sub" style="margin:0 4px 8px">Načteno událostí: '+res.total+', nových: '+res.added+'. Zapsáno tréninků: '+res.recorded+'.'+(res.revoked?' Odebráno zrušených nebo odmítnutých: '+res.revoked+'.':'')+'</div>';
     if(res.found.length){h+='<h2>Hosté, kteří ještě nejsou klienti</h2><div class="card">'+res.found.map(function(g,i){return '<button class="disc" data-a="pickGuest" data-i="'+i+'"><div>'+esc(g.name||g.email)+'</div><div class="sub">'+esc(g.email)+' · '+g.count+' událostí · klepni pro přidání</div></button>'}).join('')+'</div>';R.found=res.found}
     h+='<button class="ghost" data-a="closeSheet">Hotovo</button>';
   }
@@ -882,7 +923,7 @@ function act(a,el){
     case 'open':R.client=d.id;R.adj=0;R.note='';window.scrollTo(0,0);break;
     case 'back':R.client=null;break;
     case 'sync':
-      if(S.set.cal.url){toast('Načítám kalendář…');gcSync(true).then(function(r){if(r)toast(r.n?'Zapsáno nových tréninků: '+r.n:'Kalendář načten, nic nového')});break}
+      if(S.set.cal.url){toast('Načítám kalendář…');gcSync(true).then(function(r){if(r)toast((r.n?'Zapsáno nových tréninků: '+r.n:'Kalendář načten, nic nového')+(r.revoked?' · odebráno zrušených: '+r.revoked:''))});break}
       var n=runAll();toast(n?'Zapsáno nových tréninků: '+n:'Nic nového');break;
     case 'gcConnect':connectSheet();return;
     case 'gcCopy':
@@ -896,10 +937,10 @@ function act(a,el){
       $('gcErr').textContent='Zkouším spojení…';
       gcFetch(url,S.set.cal.token,Date.now()-120*DAY,Date.now()+60*DAY).then(function(){
         S.set.cal.url=url;S.set.cal.err='';save();closeSheet();toast('Připojeno, načítám tréninky…');
-        return gcSync(true).then(function(r){if(r)toast('Načteno událostí: '+r.total+(r.n?', zapsáno tréninků: '+r.n:''));var f=gcFound();if(f.length)guestsSheet()});
+        return gcSync(true).then(function(r){if(r)toast('Načteno událostí: '+r.total+(r.n?', zapsáno tréninků: '+r.n:'')+(r.revoked?', odebráno zrušených: '+r.revoked:''));var f=gcFound();if(f.length)guestsSheet()});
       }).catch(function(e){var el=$('gcErr');if(el){el.innerHTML=esc(e.message)+'<br><button class="pri" style="margin-top:10px" data-a="gcPage">Zkusit záložní způsob (otevře stránku Google)</button>'}});return;
     case 'gcPage':var gu=$('gcUrl');gcPage(gu?gu.value.trim():'');return;
-    case 'gcNow':toast('Načítám kalendář…');gcSync(true).then(function(r){if(r)toast(r.n?'Zapsáno nových tréninků: '+r.n:'Kalendář načten, nic nového')});return;
+    case 'gcNow':toast('Načítám kalendář…');gcSync(true).then(function(r){if(r)toast((r.n?'Zapsáno nových tréninků: '+r.n:'Kalendář načten, nic nového')+(r.revoked?' · odebráno zrušených: '+r.revoked:''))});return;
     case 'gcOff':
       if(!R.gcOff){R.gcOff=true;toast('Klepni znovu pro odpojení');setTimeout(function(){R.gcOff=false},4000);return}
       R.gcOff=false;S.set.cal.url='';S.set.cal.err='';S.events=S.events.filter(function(e){return e.src!=='google'});save();toast('Kalendář odpojen, zapsané tréninky zůstaly');break;

@@ -1,6 +1,6 @@
 /* Tréninky – service worker: aplikace se po prvním otevření ukládá a funguje bez internetu.
    Po úpravě souborů zvyš číslo verze níže, aby se v telefonu načetla nová verze. */
-const CACHE = 'treninky-v4';
+const CACHE = 'treninky-v5';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
