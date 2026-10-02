@@ -731,7 +731,9 @@ function listView(){
   var all=S.clients.filter(function(c){return c.active});
   var oa=orphansAll();
   if(oa.length)h+='<button class="banner" data-a="orph" style="background:var(--wait-bg)"><div class="nm" style="font-size:16px">'+oa.length+' '+(oa.length===1?'zapsaný trénink už není':'zapsaných tréninků už není')+' v kalendáři</div><div class="sub">Zrušené nebo odmítnuté? Klepni a zkontroluj.</div></button>';
-  if(!all.length)return h+'<div class="empty">Zatím tu nejsou žádní klienti.<br><br><button class="pri" data-a="newClient">Přidat klienta</button><button class="ghost" data-a="icsImport">Importovat kalendář (.ics)</button><button class="ghost" data-a="sample">Načíst ukázková data</button></div>';
+  var nArch=S.clients.filter(function(c){return !c.active}).length;
+  var ab=nArch?'<button class="ghost" data-a="arch">Archivovaní klienti ('+nArch+')</button>':'';
+  if(!all.length)return h+ab+'<div class="empty">Zatím tu nejsou žádní klienti.<br><br><button class="pri" data-a="newClient">Přidat klienta</button><button class="ghost" data-a="icsImport">Importovat kalendář (.ics)</button><button class="ghost" data-a="sample">Načíst ukázková data</button></div>';
   var mon=all.filter(function(c){return c.type==='Měsíční'}).sort(function(a,b){return a.name.localeCompare(b.name,'cs')});
   var pk=all.filter(function(c){return c.type!=='Měsíční'}).sort(function(a,b){return bal(a)-bal(b)});
   var g=ui.group==='monthly'?'monthly':'package';
@@ -743,14 +745,14 @@ function listView(){
     var pl=0,dn=0,cr=0;mon.forEach(function(c){var st=monthStats(c,R.month);pl+=st.planned;dn+=st.done;cr+=Math.max(0,st.proj)});
     h+='<div class="sub" style="text-align:center;margin:-2px 0 10px">Hotovo '+dn+' z '+pl+' · přenos do dalšího měsíce celkem '+cr+'</div><div class="card">';
     mon.forEach(function(c){h+=monthRow(c)});
-    return h+'</div>';
+    return h+'</div>'+ab;
   }
   h+='<div class="card">';
   pk.forEach(function(c){
     var nx=nextEv(c),b=bal(c),last=c.log.filter(function(e){return e.kind==='Trénink'}).map(function(e){return e.date}).sort(function(a,b){return b-a})[0];
     h+='<button class="item" data-a="open" data-id="'+c.id+'"><div class="rt">'+avatar(c,40)+'<div style="flex:1;min-width:0"><div class="nm">'+esc(c.name)+'</div><div class="sub">'+c.type+(last?' · poslední '+dd(last):' · zatím žádný trénink')+'</div><div class="nx">'+(nx?'Další: '+when(nx.start):'<span class="sub" style="font-weight:400">Nic naplánováno</span>')+'</div></div><div class="num'+(b<=1?' low':'')+'">'+b+'</div></div>'+tally(b,clr(c.email),true)+'</button>';
   });
-  return h+'</div>';
+  return h+'</div>'+ab;
 }
 
 function monthCard(c){
@@ -864,9 +866,10 @@ function settingsView(){
   var g=S.set.cal;
   h+='<h2>Google Kalendář</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(g.url&&!g.err?'ok':'wait')+'">'+(g.url?(g.err?'chyba':'připojeno'):'nepřipojeno')+'</span></div>'+(g.url?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(g.last)+'</span></div>'+(g.err?'<div class="kv sub" style="color:var(--red)">'+esc(g.err)+'</div>':'')+'<button class="act" data-a="gcNow">Načíst teď</button><button class="act" data-a="orph">Zkontrolovat zapsané tréninky s kalendářem</button><button class="act" data-a="gcPage">Načíst záložním způsobem (otevře stránku Google)</button><button class="act" data-a="gcConnect">Zobrazit postup a kód</button><button class="act del" data-a="gcOff">Odpojit</button>':'<button class="act" data-a="gcConnect">Připojit Google Kalendář</button>')+'</div>';
   h+='<h2>Fakturace</h2><div class="card"><div class="kv"><span>Fakturační údaje</span><span class="chip '+(billingReady()?'ok':'wait')+'">'+(billingReady()?'vyplněno':'chybí')+'</span></div><button class="act" data-a="billSet">Upravit fakturační údaje</button></div>';
+  h+='<h2>Klienti</h2><div class="card"><button class="act" data-a="arch">Archivovaní klienti ('+S.clients.filter(function(c){return !c.active}).length+')</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.7</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.8</div>';
   return h;
 }
 
@@ -885,6 +888,13 @@ function render(){
   $('tabs').innerHTML=tabs.map(function(t){return '<button data-a="tab" data-t="'+t[0]+'" class="'+(R.tab===t[0]?'on':'')+'"><span class="pl">'+ti[t[0]]+(t[0]==='mail'&&pend?'<span class="badge">'+pend+'</span>':'')+'</span><span>'+t[1]+'</span></button>'}).join('');
   $('fab').innerHTML=(R.tab==='clients'&&!R.client)?fabBtn('newClient','Klient'):(R.tab==='cal'?fabBtn('newEvent','Událost'):'');
   window.scrollTo(0,y);
+}
+function archSheet(){
+  var l=S.clients.filter(function(c){return !c.active});
+  if(!l.length){closeSheet();toast('Žádní archivovaní klienti.');return}
+  openSheet('<h3>Archivovaní klienti</h3><div class="sub" style="margin:0 4px 10px;line-height:1.5">Tito klienti jsou skrytí v seznamu. Obnovením se vrátí i s celou historií a zůstatkem.</div><div class="card">'+
+   l.map(function(c){return '<div class="hist"><div style="min-width:0"><div class="nm" style="font-size:15px">'+esc(c.name)+'</div><div class="sub">'+esc(c.email)+' · '+c.type+' · zůstatek '+bal(c)+'</div></div><span style="display:flex;align-items:center;gap:2px"><button class="ic" data-a="unarch" data-id="'+c.id+'">Obnovit</button><button class="ic" style="color:var(--red)" data-a="archDel" data-id="'+c.id+'">Smazat</button></span></div>'}).join('')+
+   '</div><button class="ghost" data-a="closeSheet">Zavřít</button>');
 }
 function evSheet(id){
   var ev=S.events.filter(function(e){return e.id===id})[0];if(!ev){toast('Událost nenalezena.');return}
@@ -1044,6 +1054,15 @@ function act(a,el){
     case 'accent':S.set.theme.accent=d.v;save();break;
     case 'bgcol':S.set.theme.bg=d.v;save();break;
     case 'orph':orphSheet(d.c);return;
+    case 'arch':archSheet();return;
+    case 'unarch':var uc=cl(d.id);if(uc){uc.active=true;S.set.ui.group=uc.type==='Měsíční'?'monthly':'package';save();toast('Klient '+uc.name+' obnoven.')}archSheet();break;
+    case 'archDel':
+      if(R.delId!==d.id){R.delId=d.id;toast('Klepni znovu na Smazat. Odstraní se i celá historie klienta.');setTimeout(function(){R.delId=null},4000);return}
+      R.delId=null;S.clients=S.clients.filter(function(x){return x.id!==d.id});save();toast('Klient smazán.');archSheet();break;
+    case 'exGo':
+      var xc=cl(d.id);if(!xc)return;
+      if(!xc.active)xc.active=true;
+      S.set.ui.group=xc.type==='Měsíční'?'monthly':'package';save();closeSheet();R.tab='clients';R.client=xc.id;R.adj=0;R.note='';window.scrollTo(0,0);toast(d.r==='1'?'Klient obnoven.':'Klient otevřen.');break;
     case 'evOpen':evSheet(d.id);return;
     case 'trOpen':trSheet(R.client,d.k,d.d);return;
     case 'evCancel':var nc=cancelEvent(d.id,'zrušeno ručně');save();closeSheet();toast('Trénink zrušen. Odebráno zápisů: '+nc+'.');break;
@@ -1060,7 +1079,11 @@ function act(a,el){
     case 'saveClient':
       var em=$('cEmail').value.trim().toLowerCase(),name=$('cName').value.trim();
       if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){$('cErr').textContent='Neplatný e-mail.';return}
-      if(S.clients.some(function(x){return x.email===em})){$('cErr').textContent='Klient s tímto e-mailem už existuje.';return}
+      var ex=S.clients.filter(function(x){return x.email===em})[0];
+      if(ex){
+        $('cErr').innerHTML=esc(ex.active?'Klient '+ex.name+' ('+ex.type+') s tímto e-mailem už je v seznamu.':'Klient '+ex.name+' s tímto e-mailem je archivovaný, proto není vidět.')+'<br><button class="pri" style="margin-top:10px" data-a="exGo" data-id="'+ex.id+'" data-r="'+(ex.active?'0':'1')+'">'+(ex.active?'Otevřít klienta':'Obnovit klienta')+'</button>';
+        return;
+      }
       var from=$('cFrom').value?new Date($('cFrom').value+'T00:00').getTime():Date.now(),typ=$('cType').value,bought=Math.floor(num($('cBought').value));
       var nc={id:uid(),name:name||em,greeting:$('cGreet').value.trim(),email:em,type:typ,active:true,trackFrom:from,price:0,billing:'',log:[]};
       if(typ==='Balíček'&&bought>0)nc.log.push({date:Date.now(),delta:bought,kind:'Nákup',key:'',note:'Počáteční stav '+bought});
@@ -1078,7 +1101,7 @@ function act(a,el){
     case 'mtoday':R.month=mStart(Date.now());break;
     case 'adj':R.adj=Math.max(-50,Math.min(50,R.adj+(+d.d)));break;
     case 'adjSave':if(!R.adj)return;c=cl(R.client);c.log.push({date:Date.now(),delta:R.adj,kind:'Úprava',key:'',note:R.note||'Ruční úprava'});R.adj=0;R.note='';save();toast('Úprava uložena');break;
-    case 'toggleActive':c=cl(R.client);c.active=!c.active;save();if(!c.active)R.client=null;break;
+    case 'toggleActive':c=cl(R.client);c.active=!c.active;save();if(!c.active){R.client=null;toast('Klient archivován. Obnovíš ho dole v seznamu v části Archivovaní klienti.')}break;
     case 'newEvent':eventSheet();return;
     case 'saveEvent':
       var date=$('evDate').value,time=$('evTime').value,dur=+$('evDur').value,rep=+$('evRep').value;
