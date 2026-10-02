@@ -156,10 +156,14 @@ var num=function(v){var n=Number(String(v).replace(',','.'));return isFinite(n)?
 var money=function(n){var p=(Math.round(n*100)/100).toFixed(2).split('.');return p[0].replace(/\B(?=(\d{3})+(?!\d))/g,'\u00a0')+','+p[1]+'\u00a0Kč'};
 
 /* ---------- data ---------- */
-function blank(){return {v:1,clients:[],events:[],mails:[],invoices:[],set:{trainer:'',b:{name:'',address:'',ico:'',dic:'',account:'',vat:false,dueDays:14,price:0,note:'',qr:true},cal:{url:'',token:'',last:0,err:'',me:'',ignore:[]},theme:{style:'clean',accent:'indigo',bg:'blue'},ui:{group:'package'},mc:{}}}}
+var EMAIL_OUT_DEF='{ahoj}\n\ntréninky v balíčku jsou vyčerpané. Dej mi prosím vědět, jestli budeme pokračovat, a domluvíme nový balíček.\n\n{podpis}';
+var SMS_DEF='{ahoj} tréninky v balíčku jsou vyčerpané. Dej mi prosím vědět, jestli budeme pokračovat, a domluvíme nový balíček. {podpis}';
+function blank(){return {v:1,clients:[],events:[],mails:[],invoices:[],sms:[],set:{notify:{train:true,out:'sms',emailText:EMAIL_OUT_DEF},sms:{on:true,text:SMS_DEF},trainer:'',b:{name:'',address:'',ico:'',dic:'',account:'',vat:false,dueDays:14,price:0,note:'',qr:true},cal:{url:'',token:'',last:0,err:'',me:'',ignore:[]},theme:{style:'clean',accent:'indigo',bg:'blue'},ui:{group:'package'},mc:{}}}}
 function loadState(){try{var j=JSON.parse(localStorage.getItem(KEY));if(j&&j.clients)return j}catch(e){}return blank()}
 var S=loadState();
-function ensureCal(){S.set=S.set||blank().set;S.set.b=Object.assign(blank().set.b,S.set.b||{});S.set.cal=Object.assign(blank().set.cal,S.set.cal||{});S.set.theme=Object.assign({style:'clean',accent:'indigo',bg:'blue'},S.set.theme||{});S.set.ui=Object.assign({group:'package'},S.set.ui||{});S.set.mc=S.set.mc||{}}
+function ensureCal(){S.set=S.set||blank().set;S.set.b=Object.assign(blank().set.b,S.set.b||{});S.set.cal=Object.assign(blank().set.cal,S.set.cal||{});S.set.theme=Object.assign({style:'clean',accent:'indigo',bg:'blue'},S.set.theme||{});S.set.ui=Object.assign({group:'package'},S.set.ui||{});S.set.mc=S.set.mc||{};S.set.sms=Object.assign({on:true,text:SMS_DEF},S.set.sms||{});S.sms=S.sms||[];
+  var oldOut=(S.set.sms&&S.set.sms.on===false)?'none':'sms';
+  S.set.notify=Object.assign({train:true,out:oldOut,emailText:EMAIL_OUT_DEF},S.set.notify||{})}
 ensureCal();
 /* ---------- barevné motivy ---------- */
 var ACC={
@@ -215,7 +219,7 @@ function applyTheme(){
   var m=document.querySelector('meta[name=theme-color]');if(m)m.setAttribute('content',P.bg);
 }
 try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',function(){applyTheme();render()})}catch(e){}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast('Data se nepodařilo uložit. Udělej zálohu.')}}
+function save(){try{smsCheck()}catch(e){}try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast('Data se nepodařilo uložit. Udělej zálohu.')}}
 var bal=function(c){return c.log.reduce(function(s,e){return s+e.delta},0)};
 var cl=function(id){return S.clients.find(function(c){return c.id===id})};
 var sign=function(){return S.set.trainer||'Tvůj trenér'};
@@ -223,9 +227,10 @@ var hello=function(c){return c.greeting?'Ahoj '+c.greeting+',':'Ahoj,'};
 
 function enqueue(to,subject,body){S.mails.unshift({id:uid(),to:to,subject:subject,body:body,created:Date.now(),sent:0})}
 function mailAfter(c,date){
+  if(S.set.notify&&S.set.notify.train===false)return;
   var left=bal(c),b=hello(c)+'\n\ntrénink ze dne '+dd(date)+' je zapsaný. '+remaining(left)+'\n';
   if(left===1)b+='\nJe to poslední trénink, dej mi prosím vědět, jestli budeme pokračovat.\n';
-  if(left<=0)b+='\nPro další tréninky bude potřeba obnovit balíček nebo měsíční platbu.\n';
+  if(left<=0&&!(c.type!=='Měsíční'&&outEmail(c)))b+='\nPro další tréninky bude potřeba obnovit balíček nebo měsíční platbu.\n';
   enqueue(c.email,'Trénink zapsán ('+dd(date)+')',b+'\n'+sign());
 }
 function mailBuy(c,n){enqueue(c.email,'Balíček '+trainings(n)+' je připsán',hello(c)+'\n\nv balíčku máš připsáno '+trainings(n)+'. '+remaining(bal(c))+'\n\n'+sign())}
@@ -284,6 +289,40 @@ function restoreEvent(id){
 }
 function eventOf(c,x){
   return S.events.filter(function(e){return e.attendees.indexOf(c.email)>=0&&(e.id===x.key||Math.abs(e.start-x.date)<=300000)})[0];
+}
+/* ---------- SMS: upozornění na vyčerpaný balíček ---------- */
+function phoneNorm(p){p=String(p||'').replace(/[\s\-().]/g,'');if(/^00/.test(p))p='+'+p.slice(2);if(/^\d{9}$/.test(p))p='+420'+p;return p}
+function tplFill(t,c){return String(t).replace(/\{ahoj\}/g,hello(c)).replace(/\{jméno\}/g,String(c.name).split(' ')[0]).replace(/\{podpis\}/g,S.set.trainer||'')}
+function smsText(c,tpl){return tplFill(tpl||(S.set.sms&&S.set.sms.text)||SMS_DEF,c).replace(/\s+/g,' ').trim()}
+function outMailBody(c){return tplFill((S.set.notify&&S.set.notify.emailText)||EMAIL_OUT_DEF,c).replace(/[ \t]+\n/g,'\n').trim()}
+/* Kanál upozornění při vyčerpání balíčku: výchozí z Nastavení, nebo vlastní u klienta (email, sms, both, none). */
+function outChannel(c){var v=c.notify;if(!v||v==='default')v=(S.set.notify&&S.set.notify.out)||'sms';return v}
+function outEmail(c){var v=outChannel(c);return v==='email'||v==='both'}
+function outSms(c){var v=outChannel(c);return v==='sms'||v==='both'}
+function openSms(num,text){
+  var a=document.createElement('a');a.href='sms:'+num+'?&body='+encodeURIComponent(text);
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+/* Při přechodu balíčku z kladného zůstatku na 0 se připraví SMS (jen u balíčkových klientů). */
+function smsCheck(){
+  if(!S.sms)S.sms=[];
+  S.clients.forEach(function(c){
+    if(!c.active||c.type==='Měsíční')return;
+    var b=bal(c);
+    if(b>0){
+      c.smsArm=true;
+      S.sms=S.sms.filter(function(m){return !(m.cid===c.id&&!m.sent)});
+      S.mails=S.mails.filter(function(m){return !(m.to===c.email&&!m.sent&&m.subject==='Balíček je vyčerpaný')});
+      return;
+    }
+    if(c.smsArm){
+      c.smsArm=false;
+      var parts=[];
+      if(outSms(c)){S.sms.unshift({id:uid(),cid:c.id,text:smsText(c),created:Date.now(),sent:0});parts.push('SMS')}
+      if(outEmail(c)){enqueue(c.email,'Balíček je vyčerpaný',outMailBody(c));parts.push('e-mail')}
+      if(parts.length)toast('Upozornění pro '+c.name+' čeká ('+parts.join(' a ')+'): balíček je vyčerpaný.');
+    }
+  });
 }
 function sync(){
   var t=Date.now(),n=0,from=t-120*DAY,done={};
@@ -795,10 +834,11 @@ function detailView(){
   if(c.type==='Měsíční')h+=monthCard(c);
   h+='<h2>Akce</h2><div class="card"><button class="act" data-a="logTraining">Zapsat trénink (proběhl teď)</button>';
   if(c.type==='Balíček')h+='<button class="act" data-a="sell" data-n="5">Prodat 5 tréninků</button><button class="act" data-a="sell" data-n="10">Prodat 10 tréninků</button>';
+  h+='<button class="act" data-a="smsNew" data-c="'+c.id+'">Poslat SMS klientovi</button>';
   /* měsíční klient: přehled a vyúčtování jsou v kartě Měsíční přehled výše */
   h+='<button class="act" data-a="invNew">Vystavit fakturu</button></div>';
   h+='<h2>Ruční úprava</h2><div class="card"><div class="kv"><span>Změna</span><span class="step"><button data-a="adj" data-d="-1">−</button><span>'+(R.adj>0?'+':'')+R.adj+'</span><button data-a="adj" data-d="1">+</button></span></div><div class="kv"><input type="text" id="adjNote" placeholder="Poznámka" value="'+esc(R.note)+'" style="text-align:left"></div><button class="act'+(R.adj?'':' off')+'" data-a="adjSave">Uložit úpravu</button></div>';
-  h+='<h2>Nastavení klienta</h2><div class="card"><div class="kv"><span>Jméno</span><input type="text" data-f="name" value="'+esc(c.name)+'"></div><div class="kv"><span>Oslovení</span><input type="text" data-f="greeting" value="'+esc(c.greeting)+'" placeholder="např. Jano"></div><div class="kv"><span>E-mail</span><input type="text" data-f="email" value="'+esc(c.email)+'" autocapitalize="off"></div><div class="kv"><span>Typ</span><select data-f="type"><option'+(c.type==='Balíček'?' selected':'')+'>Balíček</option><option'+(c.type==='Měsíční'?' selected':'')+'>Měsíční</option></select></div><div class="kv"><span>Odečítat od</span><input type="date" data-f="trackFrom" value="'+iso(c.trackFrom)+'"></div><div class="kv"><span>Cena za trénink (Kč)</span><input type="number" inputmode="decimal" data-f="price" value="'+(c.price||'')+'" placeholder="'+(S.set.b.price||0)+'"></div><div class="kv"><span>Fakturační údaje</span><textarea data-f="billing" placeholder="Adresa, IČO">'+esc(c.billing||'')+'</textarea></div><div class="kv"><span>Aktivní</span><button class="sw'+(c.active?' on':'')+'" data-a="toggleActive"></button></div></div>';
+  h+='<h2>Nastavení klienta</h2><div class="card"><div class="kv"><span>Jméno</span><input type="text" data-f="name" value="'+esc(c.name)+'"></div><div class="kv"><span>Oslovení</span><input type="text" data-f="greeting" value="'+esc(c.greeting)+'" placeholder="např. Jano"></div><div class="kv"><span>E-mail</span><input type="text" data-f="email" value="'+esc(c.email)+'" autocapitalize="off"></div><div class="kv"><span>Telefon (pro SMS)</span><input type="text" inputmode="tel" data-f="phone" value="'+esc(c.phone||'')+'" placeholder="+420 777 123 456"></div>'+(c.type!=='Měsíční'?'<div class="kv"><span>Upozornění při vyčerpání</span><select data-f="notify">'+[['default','Výchozí'],['email','E-mail'],['sms','SMS'],['both','E-mail i SMS'],['none','Nic']].map(function(o){return '<option value="'+o[0]+'"'+((c.notify||'default')===o[0]?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>':'')+'<div class="kv"><span>Typ</span><select data-f="type"><option'+(c.type==='Balíček'?' selected':'')+'>Balíček</option><option'+(c.type==='Měsíční'?' selected':'')+'>Měsíční</option></select></div><div class="kv"><span>Odečítat od</span><input type="date" data-f="trackFrom" value="'+iso(c.trackFrom)+'"></div><div class="kv"><span>Cena za trénink (Kč)</span><input type="number" inputmode="decimal" data-f="price" value="'+(c.price||'')+'" placeholder="'+(S.set.b.price||0)+'"></div><div class="kv"><span>Fakturační údaje</span><textarea data-f="billing" placeholder="Adresa, IČO">'+esc(c.billing||'')+'</textarea></div><div class="kv"><span>Aktivní</span><button class="sw'+(c.active?' on':'')+'" data-a="toggleActive"></button></div></div>';
   var invs=S.invoices.filter(function(i){return i.cid===c.id}).sort(function(a,b){return b.issued-a.issued});
   if(c.type!=='Měsíční')h+=cancelledSection(c);
   h+='<h2>Faktury</h2><div class="card">'+(invs.length?invs.map(invRow).join(''):'<div class="kv sub">Zatím žádné faktury.</div>')+'</div>';
@@ -848,11 +888,19 @@ function invoicesView(){
 }
 
 function mailsView(){
-  var h=bar('E-maily','','')+'<div class="sub sb">Zprávy čekají tady. Klepni, otevře se Mail s hotovým textem a ty jen potvrdíš odeslání.</div>';
-  if(!S.mails.length)return h+'<div class="empty">Zatím nic.<br>E-maily vzniknou po zapsání tréninku nebo prodeji balíčku.</div>';
-  h+='<div class="card">';
-  S.mails.forEach(function(m){h+='<button class="item" data-a="mail" data-id="'+m.id+'"><div class="rt"><div class="nm" style="font-size:15px">'+esc(m.subject)+'</div>'+(m.sent?'<span class="chip ok">Odesláno</span>':'<span class="chip wait">Čeká</span>')+'</div><div class="sub">'+esc(m.to)+' · '+dd(m.created)+'</div></button>'});
-  return h+'</div>';
+  var h=bar('E-maily a SMS','','')+'<div class="sub sb">Zprávy čekají tady. Klepni, otevře se Mail nebo Zprávy s hotovým textem a ty jen potvrdíš odeslání.</div>';
+  if(!S.mails.length&&!S.sms.length)return h+'<div class="empty">Zatím nic.<br>E-maily vzniknou po zapsání tréninku nebo prodeji balíčku. SMS se připraví, když klientovi dojdou tréninky z balíčku.</div>';
+  if(S.sms.length){
+    h+='<h2>SMS</h2><div class="card">';
+    S.sms.forEach(function(m){var c=cl(m.cid);h+='<button class="item" data-a="smsOpen" data-id="'+m.id+'"><div class="rt"><div class="nm" style="font-size:15px">'+esc(c?c.name:'Klient')+': balíček vyčerpán</div>'+(m.sent?'<span class="chip ok">Odesláno</span>':'<span class="chip wait">Čeká</span>')+'</div><div class="sub">'+(c&&c.phone?esc(c.phone):'chybí telefon')+' · '+dd(m.created)+'</div></button>'});
+    h+='</div>';
+  }
+  if(S.mails.length){
+    h+='<h2>E-maily</h2><div class="card">';
+    S.mails.forEach(function(m){h+='<button class="item" data-a="mail" data-id="'+m.id+'"><div class="rt"><div class="nm" style="font-size:15px">'+esc(m.subject)+'</div>'+(m.sent?'<span class="chip ok">Odesláno</span>':'<span class="chip wait">Čeká</span>')+'</div><div class="sub">'+esc(m.to)+' · '+dd(m.created)+'</div></button>'});
+    h+='</div>';
+  }
+  return h;
 }
 
 function settingsView(){
@@ -865,11 +913,15 @@ function settingsView(){
   h+='</div>';
   var g=S.set.cal;
   h+='<h2>Google Kalendář</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(g.url&&!g.err?'ok':'wait')+'">'+(g.url?(g.err?'chyba':'připojeno'):'nepřipojeno')+'</span></div>'+(g.url?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(g.last)+'</span></div>'+(g.err?'<div class="kv sub" style="color:var(--red)">'+esc(g.err)+'</div>':'')+'<button class="act" data-a="gcNow">Načíst teď</button><button class="act" data-a="orph">Zkontrolovat zapsané tréninky s kalendářem</button><button class="act" data-a="gcPage">Načíst záložním způsobem (otevře stránku Google)</button><button class="act" data-a="gcConnect">Zobrazit postup a kód</button><button class="act del" data-a="gcOff">Odpojit</button>':'<button class="act" data-a="gcConnect">Připojit Google Kalendář</button>')+'</div>';
+  var nf=S.set.notify,chs=[['email','E-mail','Mail s hotovým textem'],['sms','SMS','Zprávy s hotovým textem'],['both','E-mail i SMS','Obojí současně'],['none','Nic','Bez upozornění']];
+  h+='<h2>Upozornění klientům</h2><div class="card"><div class="kv"><span>E-mail po každém tréninku</span><button class="sw'+(nf.train!==false?' on':'')+'" data-a="trainMail" aria-label="E-mail po tréninku"></button></div><div class="kv" style="display:block"><div style="margin-bottom:12px">Když klientovi dojde balíček, poslat <span class="sub">· výchozí pro všechny</span></div><div class="stg">'+chs.map(function(x){return '<button class="stb'+(nf.out===x[0]?' on':'')+'" data-a="outCh" data-v="'+x[0]+'"><span>'+x[1]+'</span><span class="sub" style="font-weight:400">'+x[2]+'</span></button>'}).join('')+'</div></div></div>'+
+  '<div class="sub" style="margin:0 16px 4px">U každého klienta můžeš kanál změnit (detail klienta, Upozornění při vyčerpání). E-maily čekají v záložce Zprávy a odešlou se přes Mail. SMS se připraví a odešlou přes Zprávy, iPhone neumí posílat potichu na pozadí. Telefon doplň v detailu klienta.</div>';
+  h+='<h2>Texty upozornění</h2><div class="card"><div class="kv" style="display:block"><div class="sub" style="margin-bottom:8px">Text SMS. Zástupné znaky: {ahoj} (např. Ahoj Jano,), {jméno}, {podpis}</div><textarea class="big" data-f="smsText" style="color:var(--ink);min-height:96px">'+esc(S.set.sms.text)+'</textarea></div><div class="kv" style="display:block"><div class="sub" style="margin-bottom:8px">Text e-mailu o vyčerpání balíčku</div><textarea class="big" data-f="emailOutText" style="color:var(--ink);min-height:120px">'+esc(nf.emailText)+'</textarea></div></div>';
   h+='<h2>Fakturace</h2><div class="card"><div class="kv"><span>Fakturační údaje</span><span class="chip '+(billingReady()?'ok':'wait')+'">'+(billingReady()?'vyplněno':'chybí')+'</span></div><button class="act" data-a="billSet">Upravit fakturační údaje</button></div>';
   h+='<h2>Klienti</h2><div class="card"><button class="act" data-a="arch">Archivovaní klienti ('+S.clients.filter(function(c){return !c.active}).length+')</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.8</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.10</div>';
   return h;
 }
 
@@ -882,12 +934,23 @@ function render(){
   else if(R.tab==='mail')h=mailsView();
   else h=settingsView();
   $('app').innerHTML=h;
-  var pend=S.mails.filter(function(m){return !m.sent}).length;
-  var tabs=[['clients','Klienti'],['cal','Kalendář'],['invoices','Faktury'],['mail','E-maily'],['settings','Nastavení']];
+  var pend=S.mails.filter(function(m){return !m.sent}).length+S.sms.filter(function(m){return !m.sent}).length;
+  var tabs=[['clients','Klienti'],['cal','Kalendář'],['invoices','Faktury'],['mail','Zprávy'],['settings','Nastavení']];
   var ti={clients:IC.ppl,cal:IC.cal,invoices:IC.inv,mail:IC.mail,settings:IC.set};
   $('tabs').innerHTML=tabs.map(function(t){return '<button data-a="tab" data-t="'+t[0]+'" class="'+(R.tab===t[0]?'on':'')+'"><span class="pl">'+ti[t[0]]+(t[0]==='mail'&&pend?'<span class="badge">'+pend+'</span>':'')+'</span><span>'+t[1]+'</span></button>'}).join('');
   $('fab').innerHTML=(R.tab==='clients'&&!R.client)?fabBtn('newClient','Klient'):(R.tab==='cal'?fabBtn('newEvent','Událost'):'');
   window.scrollTo(0,y);
+}
+function smsCount(t){var u=/[^\x00-\x7F]/.test(t),one=u?70:160,multi=u?67:153,n=t.length;return {n:n,p:n<=one?1:Math.ceil(n/multi)}}
+function updSmsCount(){var el=$('smsCnt'),t=$('smsTxt');if(!el||!t)return;var c=smsCount(t.value);el.textContent=c.n+' znaků, přibližně '+c.p+' SMS (diakritika zkracuje jednu SMS na 70 znaků)'}
+function smsSheet(id,cid){
+  var m=id?S.sms.filter(function(x){return x.id===id})[0]:null,c=cl(m?m.cid:cid);if(!c)return;
+  var text=m?m.text:smsText(c);
+  openSheet('<h3>SMS klientovi</h3><div class="sub" style="margin:0 4px 8px">'+esc(c.name)+' · '+(c.phone?esc(phoneNorm(c.phone)):'<span style="color:var(--red)">chybí telefon, doplň ho v detailu klienta</span>')+'</div><textarea class="big" id="smsTxt" style="color:var(--ink)">'+esc(text)+'</textarea><div class="sub" id="smsCnt" style="margin:6px 4px"></div>'+
+   '<button class="pri" data-a="smsGo" data-id="'+(m?m.id:'')+'" data-c="'+c.id+'">Otevřít Zprávy a odeslat</button>'+
+   (m&&!m.sent?'<button class="ghost" data-a="smsDone" data-id="'+m.id+'">Označit jako odeslané</button>':'')+
+   (m?'<button class="ghost" style="color:var(--red)" data-a="smsDel" data-id="'+m.id+'">Smazat</button>':'')+'<button class="ghost" data-a="closeSheet">Zavřít</button>');
+  updSmsCount();
 }
 function archSheet(){
   var l=S.clients.filter(function(c){return !c.active});
@@ -936,7 +999,7 @@ function closeSheet(){$('sheet').innerHTML=''}
 
 function addSheet(pre){
   pre=pre||{};
-  openSheet('<h3>Nový klient</h3><div class="card"><div class="kv"><span>Jméno</span><input type="text" id="cName" value="'+esc(pre.name||'')+'"></div><div class="kv"><span>Oslovení</span><input type="text" id="cGreet" placeholder="např. Jano"></div><div class="kv"><span>E-mail</span><input type="text" id="cEmail" inputmode="email" autocapitalize="off" autocomplete="off" value="'+esc(pre.email||'')+'"></div><div class="kv"><span>Typ</span><select id="cType"><option'+(S.set.ui&&S.set.ui.group==='monthly'?'':' selected')+'>Balíček</option><option'+(S.set.ui&&S.set.ui.group==='monthly'?' selected':'')+'>Měsíční</option></select></div><div class="kv"><span>Zakoupeno tréninků</span><input type="number" id="cBought" inputmode="numeric" value="10"></div><div class="kv"><span>Odečítat od</span><input type="date" id="cFrom" value="'+iso(Date.now())+'"></div></div><div class="sub" style="margin:0 4px">Dřívější datum zvol, pokud se mají započítat už proběhlé tréninky z kalendáře. Zakoupený počet platí jen pro balíček.</div><div class="err" id="cErr"></div><button class="pri" data-a="saveClient">Přidat klienta</button><button class="ghost" data-a="closeSheet">Zrušit</button>');
+  openSheet('<h3>Nový klient</h3><div class="card"><div class="kv"><span>Jméno</span><input type="text" id="cName" value="'+esc(pre.name||'')+'"></div><div class="kv"><span>Oslovení</span><input type="text" id="cGreet" placeholder="např. Jano"></div><div class="kv"><span>E-mail</span><input type="text" id="cEmail" inputmode="email" autocapitalize="off" autocomplete="off" value="'+esc(pre.email||'')+'"></div><div class="kv"><span>Telefon (pro SMS)</span><input type="text" id="cPhone" inputmode="tel" autocomplete="off" placeholder="+420 777 123 456"></div><div class="kv"><span>Typ</span><select id="cType"><option'+(S.set.ui&&S.set.ui.group==='monthly'?'':' selected')+'>Balíček</option><option'+(S.set.ui&&S.set.ui.group==='monthly'?' selected':'')+'>Měsíční</option></select></div><div class="kv"><span>Zakoupeno tréninků</span><input type="number" id="cBought" inputmode="numeric" value="10"></div><div class="kv"><span>Odečítat od</span><input type="date" id="cFrom" value="'+iso(Date.now())+'"></div></div><div class="sub" style="margin:0 4px">Dřívější datum zvol, pokud se mají započítat už proběhlé tréninky z kalendáře. Zakoupený počet platí jen pro balíček.</div><div class="err" id="cErr"></div><button class="pri" data-a="saveClient">Přidat klienta</button><button class="ghost" data-a="closeSheet">Zrušit</button>');
 }
 function eventSheet(){
   var t=new Date();t.setMinutes(0,0,0);t=new Date(t.getTime()+36e5);
@@ -1054,6 +1117,19 @@ function act(a,el){
     case 'accent':S.set.theme.accent=d.v;save();break;
     case 'bgcol':S.set.theme.bg=d.v;save();break;
     case 'orph':orphSheet(d.c);return;
+    case 'smsNew':smsSheet(null,d.c);return;
+    case 'smsOpen':smsSheet(d.id,null);return;
+    case 'smsGo':
+      var sc=cl(d.c),stxt=$('smsTxt').value.trim();
+      if(!sc||!stxt)return;
+      if(!sc.phone){toast('Nejdřív doplň telefon v detailu klienta.');closeSheet();R.tab='clients';R.client=sc.id;break}
+      openSms(phoneNorm(sc.phone),stxt);
+      if(d.id){var sm=S.sms.filter(function(x){return x.id===d.id})[0];if(sm){sm.text=stxt;sm.sent=Date.now()}}
+      save();closeSheet();toast('Otevřeno ve Zprávách, potvrď odeslání tam.');break;
+    case 'smsDone':var sd=S.sms.filter(function(x){return x.id===d.id})[0];if(sd)sd.sent=Date.now();save();closeSheet();break;
+    case 'smsDel':S.sms=S.sms.filter(function(x){return x.id!==d.id});save();closeSheet();break;
+    case 'outCh':S.set.notify.out=d.v;save();break;
+    case 'trainMail':S.set.notify.train=!(S.set.notify.train!==false);save();break;
     case 'arch':archSheet();return;
     case 'unarch':var uc=cl(d.id);if(uc){uc.active=true;S.set.ui.group=uc.type==='Měsíční'?'monthly':'package';save();toast('Klient '+uc.name+' obnoven.')}archSheet();break;
     case 'archDel':
@@ -1085,7 +1161,7 @@ function act(a,el){
         return;
       }
       var from=$('cFrom').value?new Date($('cFrom').value+'T00:00').getTime():Date.now(),typ=$('cType').value,bought=Math.floor(num($('cBought').value));
-      var nc={id:uid(),name:name||em,greeting:$('cGreet').value.trim(),email:em,type:typ,active:true,trackFrom:from,price:0,billing:'',log:[]};
+      var nc={id:uid(),name:name||em,greeting:$('cGreet').value.trim(),phone:($('cPhone')?$('cPhone').value.trim():''),email:em,type:typ,active:true,trackFrom:from,price:0,billing:'',log:[]};
       if(typ==='Balíček'&&bought>0)nc.log.push({date:Date.now(),delta:bought,kind:'Nákup',key:'',note:'Počáteční stav '+bought});
       S.clients.push(nc);closeSheet();var r=runAll();toast(r?'Klient přidán, zapsáno tréninků: '+r:'Klient přidán');break;
     case 'closeSheet':closeSheet();return;
@@ -1164,13 +1240,17 @@ function act(a,el){
   render();
 }
 document.addEventListener('click',function(e){var el=e.target.closest('[data-a]');if(!el)return;if(el.classList.contains('ov')&&e.target!==el)return;act(el.dataset.a,el)});
-document.addEventListener('input',function(e){var t=e.target;if(t.id==='adjNote')R.note=t.value;if(t.dataset&&t.dataset.l!==undefined&&R.draft){R.draft.lines[+t.dataset.l][t.dataset.k]=t.value;updateTotal()}});
+document.addEventListener('input',function(e){var t=e.target;if(t.id==='smsTxt')updSmsCount();if(t.id==='adjNote')R.note=t.value;if(t.dataset&&t.dataset.l!==undefined&&R.draft){R.draft.lines[+t.dataset.l][t.dataset.k]=t.value;updateTotal()}});
 document.addEventListener('change',function(e){
   var f=e.target.dataset.f;if(!f)return;var v=e.target.value;
   if(f==='trainer'){S.set.trainer=v;save();return}
+  if(f==='smsText'){S.set.sms.text=v||SMS_DEF;save();return}
+  if(f==='emailOutText'){S.set.notify.emailText=v||EMAIL_OUT_DEF;save();return}
   var c=cl(R.client);if(!c)return;
   if(f==='name')c.name=v||c.name;
   else if(f==='greeting')c.greeting=v.trim();
+  else if(f==='phone')c.phone=v.trim();
+  else if(f==='notify'){c.notify=v;c.smsArm=bal(c)>0?true:c.smsArm}
   else if(f==='email'){var em=v.trim().toLowerCase();if(/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)&&!S.clients.some(function(x){return x!==c&&x.email===em}))c.email=em;else toast('E-mail je neplatný nebo už existuje.')}
   else if(f==='type')c.type=v;
   else if(f==='trackFrom'){if(v)c.trackFrom=new Date(v+'T00:00').getTime()}
