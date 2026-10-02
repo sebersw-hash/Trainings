@@ -247,6 +247,18 @@ function revokeTraining(c,x,why){
   for(var k=0;k<S.mails.length;k++){var m=S.mails[k];if(m.to===c.email&&!m.sent&&m.subject===subj){S.mails.splice(k,1);break}}
   return true;
 }
+/* Zapsané tréninky, které už nejsou v propojeném kalendáři (pravděpodobně zrušené nebo odmítnuté). */
+function calReady(){var g=S.set.cal;return !!(g.url&&g.last&&!g.err)}
+function orphansOf(c){
+  if(!calReady())return [];
+  var now=Date.now(),from=Math.max(now-120*DAY,c.trackFrom),evs=S.events.filter(function(e){return e.attendees.indexOf(c.email)>=0});
+  return c.log.filter(function(x){
+    if(x.kind!=='Trénink'||x.keep||String(x.key).indexOf('manual_')===0)return false;
+    if(x.date<from||x.date>now)return false;
+    return !evs.some(function(e){return Math.abs(e.start-x.date)<=300000});
+  });
+}
+function orphansAll(){var out=[];S.clients.forEach(function(c){orphansOf(c).forEach(function(x){out.push({c:c,x:x})})});return out}
 function sync(){
   var t=Date.now(),n=0,from=t-120*DAY,done={};
   S.clients.forEach(function(c){c.log.forEach(function(e){if(e.kind==='Trénink')done[e.key+'|'+c.email]=1})});
@@ -256,7 +268,8 @@ function sync(){
       var c=S.clients.find(function(x){return x.email===em&&x.active});
       if(!c||ev.start<c.trackFrom)return;
       var key=ev.id;if(done[key+'|'+em])return;
-      if(c.log.some(function(x){return x.kind==='Trénink'&&Math.abs(x.date-ev.start)<60000}))return;
+      var dupe=c.log.filter(function(x){return x.kind==='Trénink'&&Math.abs(x.date-ev.start)<60000})[0];
+      if(dupe){if(String(dupe.key).indexOf('manual_')!==0&&String(dupe.key).indexOf('g_')!==0&&key.indexOf('g_')===0)dupe.key=key;return}
       c.log.push({date:ev.start,delta:-1,kind:'Trénink',key:key,note:ev.title});done[key+'|'+em]=1;n++;
       if(t-ev.end<3*DAY)mailAfter(c,ev.start);
     });
@@ -676,6 +689,8 @@ function listView(){
   var ui=S.set.ui||(S.set.ui={group:'package'});
   var h=bar('Tréninky','',ibtn('sync',IC.sync,'Obnovit')+ibtn('icsImport',IC.up,'Importovat kalendář'))+gcBanner();
   var all=S.clients.filter(function(c){return c.active});
+  var oa=orphansAll();
+  if(oa.length)h+='<button class="banner" data-a="orph" style="background:var(--wait-bg)"><div class="nm" style="font-size:16px">'+oa.length+' '+(oa.length===1?'zapsaný trénink už není':'zapsaných tréninků už není')+' v kalendáři</div><div class="sub">Zrušené nebo odmítnuté? Klepni a zkontroluj.</div></button>';
   if(!all.length)return h+'<div class="empty">Zatím tu nejsou žádní klienti.<br><br><button class="pri" data-a="newClient">Přidat klienta</button><button class="ghost" data-a="icsImport">Importovat kalendář (.ics)</button><button class="ghost" data-a="sample">Načíst ukázková data</button></div>';
   var mon=all.filter(function(c){return c.type==='Měsíční'}).sort(function(a,b){return a.name.localeCompare(b.name,'cs')});
   var pk=all.filter(function(c){return c.type!=='Měsíční'}).sort(function(a,b){return bal(a)-bal(b)});
@@ -732,6 +747,8 @@ function detailView(){
   var b=bal(c),nx=nextEv(c);
   var h=bar('',ibtn('back',IC.back,'Zpět'),'')+'<div class="hd">'+avatar(c,56)+'<div style="min-width:0"><div class="hn">'+esc(c.name)+'</div><div class="sub">'+esc(c.email)+'</div></div></div>';
   h+='<div class="card"><div class="item" style="cursor:default"><div class="rt"><div><div class="sub">Odtrénováno: '+c.log.filter(function(e){return e.kind==='Trénink'}).length+'</div><div class="nx">'+(nx?'Další: '+when(nx.start):'Nic naplánováno')+'</div></div><div class="num big'+(b<=1?' low':'')+'">'+b+'</div></div>'+tally(b,clr(c.email))+'</div></div>';
+  var oc=orphansOf(c);
+  if(oc.length)h+='<button class="banner" data-a="orph" data-c="'+c.id+'" style="background:var(--wait-bg)"><div class="nm" style="font-size:16px">'+oc.length+' '+(oc.length===1?'zapsaný trénink už není':'zapsaných tréninků už není')+' v kalendáři</div><div class="sub">Zrušené nebo odmítnuté? Klepni a zkontroluj.</div></button>';
   if(c.type==='Měsíční')h+=monthCard(c);
   h+='<h2>Akce</h2><div class="card"><button class="act" data-a="logTraining">Zapsat trénink (proběhl teď)</button>';
   if(c.type==='Balíček')h+='<button class="act" data-a="sell" data-n="5">Prodat 5 tréninků</button><button class="act" data-a="sell" data-n="10">Prodat 10 tréninků</button>';
@@ -803,11 +820,11 @@ function settingsView(){
   else h+='<div class="kv sub">Barvy tohoto stylu jsou pevné. Barvu tlačítek a pozadí můžeš ladit ve stylu Čistý.</div>';
   h+='</div>';
   var g=S.set.cal;
-  h+='<h2>Google Kalendář</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(g.url&&!g.err?'ok':'wait')+'">'+(g.url?(g.err?'chyba':'připojeno'):'nepřipojeno')+'</span></div>'+(g.url?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(g.last)+'</span></div>'+(g.err?'<div class="kv sub" style="color:var(--red)">'+esc(g.err)+'</div>':'')+'<button class="act" data-a="gcNow">Načíst teď</button><button class="act" data-a="gcPage">Načíst záložním způsobem (otevře stránku Google)</button><button class="act" data-a="gcConnect">Zobrazit postup a kód</button><button class="act del" data-a="gcOff">Odpojit</button>':'<button class="act" data-a="gcConnect">Připojit Google Kalendář</button>')+'</div>';
+  h+='<h2>Google Kalendář</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(g.url&&!g.err?'ok':'wait')+'">'+(g.url?(g.err?'chyba':'připojeno'):'nepřipojeno')+'</span></div>'+(g.url?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(g.last)+'</span></div>'+(g.err?'<div class="kv sub" style="color:var(--red)">'+esc(g.err)+'</div>':'')+'<button class="act" data-a="gcNow">Načíst teď</button><button class="act" data-a="orph">Zkontrolovat zapsané tréninky s kalendářem</button><button class="act" data-a="gcPage">Načíst záložním způsobem (otevře stránku Google)</button><button class="act" data-a="gcConnect">Zobrazit postup a kód</button><button class="act del" data-a="gcOff">Odpojit</button>':'<button class="act" data-a="gcConnect">Připojit Google Kalendář</button>')+'</div>';
   h+='<h2>Fakturace</h2><div class="card"><div class="kv"><span>Fakturační údaje</span><span class="chip '+(billingReady()?'ok':'wait')+'">'+(billingReady()?'vyplněno':'chybí')+'</span></div><button class="act" data-a="billSet">Upravit fakturační údaje</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.4</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.5</div>';
   return h;
 }
 
@@ -826,6 +843,22 @@ function render(){
   $('tabs').innerHTML=tabs.map(function(t){return '<button data-a="tab" data-t="'+t[0]+'" class="'+(R.tab===t[0]?'on':'')+'"><span class="pl">'+ti[t[0]]+(t[0]==='mail'&&pend?'<span class="badge">'+pend+'</span>':'')+'</span><span>'+t[1]+'</span></button>'}).join('');
   $('fab').innerHTML=(R.tab==='clients'&&!R.client)?fabBtn('newClient','Klient'):(R.tab==='cal'?fabBtn('newEvent','Událost'):'');
   window.scrollTo(0,y);
+}
+function orphSheet(cid){
+  var list=orphansAll().filter(function(o){return !cid||o.c.id===cid}).sort(function(a,b){return b.x.date-a.x.date});
+  if(!list.length){closeSheet();toast('Všechny zapsané tréninky odpovídají kalendáři.');return}
+  openSheet('<h3>Tréninky mimo kalendář</h3><div class="sub" style="margin:0 4px 10px;line-height:1.5">Tyto zapsané tréninky už nejsou v propojeném Google Kalendáři. Pravděpodobně byly zrušené nebo odmítnuté. Označené se odeberou a kredit se vrátí.</div><div class="card">'+
+   list.map(function(o){return '<label class="cb"><input type="checkbox" name="orph" value="'+esc(o.c.id+'|'+o.x.key+'|'+o.x.date)+'" checked><div><div>'+esc(o.c.name)+'</div><div class="sub">'+when(o.x.date)+' · '+esc(o.x.note||'trénink')+'</div></div></label>'}).join('')+
+   '</div><button class="pri" data-a="orphDo">Odebrat označené</button><button class="ghost" data-a="orphKeep">Ponechat všechny jako platné</button><button class="ghost" data-a="closeSheet">Zavřít</button>');
+}
+function orphPick(onlyChecked){
+  var out=[];[].slice.call(document.querySelectorAll('#sheet input[name=orph]')).forEach(function(i){
+    if(onlyChecked&&!i.checked)return;
+    var p=i.value.split('|'),c=cl(p[0]);if(!c)return;
+    var x=c.log.filter(function(e){return e.kind==='Trénink'&&String(e.key)===p[1]&&String(e.date)===p[2]})[0];
+    if(x)out.push({c:c,x:x});
+  });
+  return out;
 }
 function openSheet(h){$('sheet').innerHTML='<div class="ov" data-a="closeSheet"><div class="sh">'+h+'</div></div>'}
 function closeSheet(){$('sheet').innerHTML=''}
@@ -949,6 +982,11 @@ function act(a,el){
     case 'style':S.set.theme.style=d.v;save();break;
     case 'accent':S.set.theme.accent=d.v;save();break;
     case 'bgcol':S.set.theme.bg=d.v;save();break;
+    case 'orph':orphSheet(d.c);return;
+    case 'orphDo':
+      var rm=orphPick(true),nrm=0;rm.forEach(function(o){if(revokeTraining(o.c,o.x,'zrušen nebo odmítnut (není v kalendáři)'))nrm++});
+      save();closeSheet();toast(nrm?'Odebráno tréninků: '+nrm+'. Kredit se vrátil.':'Nic se neodebralo.');break;
+    case 'orphKeep':orphPick(false).forEach(function(o){o.x.keep=true});save();closeSheet();toast('Ponecháno jako platné.');break;
     case 'today':var te=$('today');if(te)te.scrollIntoView({behavior:'smooth',block:'start'});return;
     case 'newClient':addSheet();return;
     case 'saveClient':
