@@ -158,10 +158,12 @@ var money=function(n){var p=(Math.round(n*100)/100).toFixed(2).split('.');return
 /* ---------- data ---------- */
 var EMAIL_OUT_DEF='{ahoj}\n\ntréninky v balíčku jsou vyčerpané. Dej mi prosím vědět, jestli budeme pokračovat, a domluvíme nový balíček.\n\n{podpis}';
 var SMS_DEF='{ahoj} tréninky v balíčku jsou vyčerpané. Dej mi prosím vědět, jestli budeme pokračovat, a domluvíme nový balíček. {podpis}';
-function blank(){return {v:1,clients:[],events:[],mails:[],invoices:[],sms:[],set:{notify:{train:true,out:'sms',emailText:EMAIL_OUT_DEF},sms:{on:true,text:SMS_DEF},trainer:'',b:{name:'',address:'',ico:'',dic:'',account:'',vat:false,dueDays:14,price:0,note:'',qr:true},cal:{url:'',token:'',last:0,err:'',me:'',ignore:[]},theme:{style:'clean',accent:'indigo',bg:'blue'},ui:{group:'package'},mc:{}}}}
+function blank(){return {v:1,clients:[],events:[],mails:[],invoices:[],sms:[],set:{auto:{on:false,mode:'me',digest:true,last:0,pending:0,err:'',log:[]},idk:{id:'',secret:'',last:0,count:0,err:'',map:{}},notify:{train:true,out:'sms',emailText:EMAIL_OUT_DEF},sms:{on:true,text:SMS_DEF},trainer:'',b:{name:'',address:'',ico:'',dic:'',account:'',vat:false,dueDays:14,price:0,note:'',qr:true},cal:{url:'',token:'',last:0,err:'',me:'',ignore:[]},theme:{style:'clean',accent:'indigo',bg:'blue'},ui:{group:'package'},mc:{}}}}
 function loadState(){try{var j=JSON.parse(localStorage.getItem(KEY));if(j&&j.clients)return j}catch(e){}return blank()}
 var S=loadState();
 function ensureCal(){S.set=S.set||blank().set;S.set.b=Object.assign(blank().set.b,S.set.b||{});S.set.cal=Object.assign(blank().set.cal,S.set.cal||{});S.set.theme=Object.assign({style:'clean',accent:'indigo',bg:'blue'},S.set.theme||{});S.set.ui=Object.assign({group:'package'},S.set.ui||{});S.set.mc=S.set.mc||{};S.set.sms=Object.assign({on:true,text:SMS_DEF},S.set.sms||{});S.sms=S.sms||[];
+  S.set.idk=Object.assign({id:'',secret:'',last:0,count:0,err:'',map:{}},S.set.idk||{});
+  S.set.auto=Object.assign({on:false,mode:'me',digest:true,last:0,pending:0,err:'',log:[]},S.set.auto||{});
   var oldOut=(S.set.sms&&S.set.sms.on===false)?'none':'sms';
   S.set.notify=Object.assign({train:true,out:oldOut,emailText:EMAIL_OUT_DEF},S.set.notify||{})}
 ensureCal();
@@ -219,19 +221,19 @@ function applyTheme(){
   var m=document.querySelector('meta[name=theme-color]');if(m)m.setAttribute('content',P.bg);
 }
 try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',function(){applyTheme();render()})}catch(e){}
-function save(){try{smsCheck()}catch(e){}try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast('Data se nepodařilo uložit. Udělej zálohu.')}}
+function save(){try{smsCheck()}catch(e){}try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast('Data se nepodařilo uložit. Udělej zálohu.')}try{autoSoon()}catch(e){}}
 var bal=function(c){return c.log.reduce(function(s,e){return s+e.delta},0)};
 var cl=function(id){return S.clients.find(function(c){return c.id===id})};
 var sign=function(){return S.set.trainer||'Tvůj trenér'};
 var hello=function(c){return c.greeting?'Ahoj '+c.greeting+',':'Ahoj,'};
 
-function enqueue(to,subject,body){S.mails.unshift({id:uid(),to:to,subject:subject,body:body,created:Date.now(),sent:0})}
-function mailAfter(c,date){
+function enqueue(to,subject,body,id){if(id&&S.mails.some(function(m){return m.id===id}))return;S.mails.unshift({id:id||uid(),to:to,subject:subject,body:body,created:Date.now(),sent:0})}
+function mailAfter(c,date,key){
   if(S.set.notify&&S.set.notify.train===false)return;
   var left=bal(c),b=hello(c)+'\n\ntrénink ze dne '+dd(date)+' je zapsaný. '+remaining(left)+'\n';
   if(left===1)b+='\nJe to poslední trénink, dej mi prosím vědět, jestli budeme pokračovat.\n';
   if(left<=0&&!(c.type!=='Měsíční'&&outEmail(c)))b+='\nPro další tréninky bude potřeba obnovit balíček nebo měsíční platbu.\n';
-  enqueue(c.email,'Trénink zapsán ('+dd(date)+')',b+'\n'+sign());
+  enqueue(c.email,'Trénink zapsán ('+dd(date)+')',b+'\n'+sign(),key?'t:'+key+'|'+c.email:undefined);
 }
 function mailBuy(c,n){enqueue(c.email,'Balíček '+trainings(n)+' je připsán',hello(c)+'\n\nv balíčku máš připsáno '+trainings(n)+'. '+remaining(bal(c))+'\n\n'+sign())}
 function mailMonthly(c,d,planned,carry,toPay){
@@ -239,7 +241,7 @@ function mailMonthly(c,d,planned,carry,toPay){
   var b=hello(c)+'\n\nv měsíci '+m+' proběhne '+trainings(planned)+'.\n';
   if(carry>0)b+='Z minulého měsíce ti zbývá '+trainings(carry)+' (už zaplacené).\n';
   b+='\nK úhradě: '+trainings(toPay)+'.\n\nPokud některý trénink nestihneš, přesune se do dalšího měsíce.\n\n'+sign();
-  enqueue(c.email,'Tréninky na '+m+' – k úhradě '+trainings(toPay),b);
+  enqueue(c.email,'Tréninky na '+m+' – k úhradě '+trainings(toPay),b,'mm:'+ym(d.getTime())+'|'+c.email);
 }
 
 /* Trénink, který byl zrušen nebo odmítnut (klientem i trenérem), se nepočítá: kredit se vrátí a čekající e-mail se smaže. */
@@ -249,7 +251,9 @@ function revokeTraining(c,x,why){
   c.log.push({date:x.date,delta:0,kind:'Úprava',key:'rev_'+x.key,note:'Nezapočítáno ('+why+'): '+(x.note||'trénink')});
   var subj='Trénink zapsán ('+dd(x.date)+')';
   /* smaže se jen jeden čekající e-mail (v týž den může být tréninků víc) */
-  for(var k=0;k<S.mails.length;k++){var m=S.mails[k];if(m.to===c.email&&!m.sent&&m.subject===subj){S.mails.splice(k,1);break}}
+  var tid='t:'+x.key+'|'+c.email,rm=false;
+  for(var k=0;k<S.mails.length;k++){if(S.mails[k].id===tid&&!S.mails[k].sent){S.mails.splice(k,1);rm=true;break}}
+  if(!rm)for(var k2=0;k2<S.mails.length;k2++){var m=S.mails[k2];if(m.to===c.email&&!m.sent&&m.subject===subj){S.mails.splice(k2,1);break}}
   return true;
 }
 /* Zapsané tréninky, které už nejsou v propojeném kalendáři (pravděpodobně zrušené nebo odmítnuté). */
@@ -318,8 +322,9 @@ function smsCheck(){
     if(c.smsArm){
       c.smsArm=false;
       var parts=[];
-      if(outSms(c)){S.sms.unshift({id:uid(),cid:c.id,text:smsText(c),created:Date.now(),sent:0});parts.push('SMS')}
-      if(outEmail(c)){enqueue(c.email,'Balíček je vyčerpaný',outMailBody(c));parts.push('e-mail')}
+      var lastT=c.log.filter(function(e){return e.kind==='Trénink'}).sort(function(a,b){return b.date-a.date})[0],tag=c.id+'|'+(lastT?lastT.key:'');
+      if(outSms(c)){var sid='x:'+tag;if(!S.sms.some(function(m){return m.id===sid})){S.sms.unshift({id:sid,cid:c.id,text:smsText(c),created:Date.now(),sent:0})}parts.push('SMS')}
+      if(outEmail(c)){enqueue(c.email,'Balíček je vyčerpaný',outMailBody(c),'ox:'+tag);parts.push('e-mail')}
       if(parts.length)toast('Upozornění pro '+c.name+' čeká ('+parts.join(' a ')+'): balíček je vyčerpaný.');
     }
   });
@@ -337,7 +342,7 @@ function sync(){
       var dupe=c.log.filter(function(x){return x.kind==='Trénink'&&Math.abs(x.date-ev.start)<60000})[0];
       if(dupe){if(String(dupe.key).indexOf('manual_')!==0&&String(dupe.key).indexOf('g_')!==0&&key.indexOf('g_')===0)dupe.key=key;return}
       c.log.push({date:ev.start,delta:-1,kind:'Trénink',key:key,note:ev.title});done[key+'|'+em]=1;n++;
-      if(t-ev.end<3*DAY)mailAfter(c,ev.start);
+      if(t-ev.end<3*DAY)mailAfter(c,ev.start,key);
     });
   });
   return n;
@@ -519,7 +524,26 @@ function bridgeCode(){
   '    .map(function (ev) {','      return {','        myStatus: my_(ev),','        id: ev.getId() + "_" + ev.getStartTime().getTime(),','        title: ev.getTitle(),','        start: ev.getStartTime().getTime(),','        end: ev.getEndTime().getTime(),',
   '        guests: ev.getGuestList().map(function (g) {','          return { email: g.getEmail(), name: g.getName(), status: String(g.getGuestStatus()) };','        })','      };','    })',
   '    .filter(function (ev) { return ev.guests.length > 0; });','  return { ok: true, me: Session.getEffectiveUser().getEmail(), events: events };','}','',
-  'function doGet(e) {','  const p = (e && e.parameter) || {};','  const json = JSON.stringify(data_(p));',
+  'const IDK_ID = "'+String(S.set.idk.id||'').replace(/[^A-Za-z0-9._\-]/g,'')+'";','const IDK_SECRET = "'+String(S.set.idk.secret||'').replace(/[^A-Za-z0-9._\-]/g,'')+'";','',
+  'function idk_(p) {','  if (!IDK_ID || !IDK_SECRET) return { ok: false, error: "idk", detail: "Ve skriptu chybí přístup do iDokladu." };',
+  '  const urls = ["https://identity.idoklad.cz/server/connect/token", "https://app.idoklad.cz/identity/server/connect/token"];','  let tok = null, why = "";',
+  '  for (let i = 0; i < urls.length && !tok; i++) {','    const r = UrlFetchApp.fetch(urls[i], { method: "post", muteHttpExceptions: true,','      payload: { grant_type: "client_credentials", client_id: IDK_ID, client_secret: IDK_SECRET, scope: "idoklad_api" } });',
+  '    if (r.getResponseCode() === 200) tok = JSON.parse(r.getContentText()).access_token; else why = "HTTP " + r.getResponseCode();','  }',
+  '  if (!tok) return { ok: false, error: "idk", detail: "Přihlášení do iDokladu selhalo (" + why + "). Zkontroluj Client ID a Client Secret." };',
+  '  const head = { Authorization: "Bearer " + tok };','  const all = function (path) {','    let items = [];',
+  '    for (let page = 1; page <= 30; page++) {','      const r = UrlFetchApp.fetch("https://api.idoklad.cz/v3/" + path + "?page=" + page + "&pagesize=100", { headers: head, muteHttpExceptions: true });',
+  '      if (r.getResponseCode() !== 200) return { err: "HTTP " + r.getResponseCode() + " (" + path + "): " + r.getContentText().slice(0, 120) };',
+  '      const j = JSON.parse(r.getContentText());','      const d = j.Data || j;','      const arr = d.Items || d.items || [];','      items = items.concat(arr);',
+  '      if (arr.length < 100 || page >= (d.TotalPages || 1)) break;','    }','    return { items: items };','  };',
+  '  const inv = all("IssuedInvoices");','  if (inv.err) return { ok: false, error: "idk", detail: inv.err };','  const con = all("Contacts");',
+  '  const cm = {};','  (con.items || []).forEach(function (c) {','    cm[c.Id] = { name: c.CompanyName || ((c.Firstname || "") + " " + (c.Surname || "")).trim(), email: c.Email || "", phone: c.Mobile || c.Phone || "" };','  });',
+  '  const since = Number(p.since) || 0;','  const num = function (v) { return v == null ? 0 : Number(v) || 0; };','  const day = function (v) { const t = v ? Date.parse(v) : 0; return t > 0 ? t : 0; };',
+  '  const out = [];','  inv.items.forEach(function (x) {','    const issued = day(x.DateOfIssue);','    if (since && issued && issued < since) return;',
+  '    const pr = x.Prices || {};','    const ps = x.PaymentStatus == null ? "" : String(x.PaymentStatus);','    const dop = day(x.DateOfPayment);',
+  '    const paid = x.IsPaid === true || ps === "1" || /^(paid|uhrazen)/i.test(ps) || dop > 0;','    const c = cm[x.PartnerId] || {};',
+  '    out.push({ id: x.Id, number: String(x.DocumentNumber || x.Id), issued: issued, due: day(x.DateOfMaturity), paidOn: dop, paid: paid, ps: ps,','      total: num(pr.TotalWithVat != null ? pr.TotalWithVat : x.TotalWithVat), cur: x.CurrencyId || 0, partnerId: x.PartnerId,','      partner: c.name || x.PartnerName || "", email: String(c.email || "").toLowerCase(), phone: c.phone || "", desc: String(x.Description || "").slice(0, 160) });','  });',
+  '  return { ok: true, invoices: out, contacts: (con.items || []).length, keys: Object.keys(inv.items[0] || {}) };','}','',
+  'function doGet(e) {','  const p = (e && e.parameter) || {};','  const json = JSON.stringify(route_(p));',
   '  if (p.m === "frame" && /^[A-Za-z0-9_]+$/.test(p.i || "")) {',
   '    const safe = json.replace(/</g, "\\\\u003c");',
   '    return HtmlService.createHtmlOutput("<script>try{top.postMessage({gcFrame:\\"" + p.i + "\\",data:" + safe + "},\\"*\\")}catch(x){}<\\/script>")',
@@ -529,11 +553,11 @@ function bridgeCode(){
   '    return HtmlService.createHtmlOutput("<body style=\\"font-family:-apple-system,Arial,sans-serif;padding:28px;text-align:center\\"><h2>Kalendář je načtený</h2><p><a target=\\"_top\\" href=\\"" + link + "\\" style=\\"display:inline-block;background:#4338ca;color:#fff;padding:16px 28px;border-radius:14px;text-decoration:none;font-weight:600\\">Zpět do aplikace</a></p></body>")',
   '      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);','  }',
   '  if (p.cb && /^[A-Za-z0-9_]+$/.test(p.cb)) {','    return ContentService.createTextOutput(p.cb + "(" + json + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);','  }',
-  '  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);','}'].join('\n');
+  '  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);','}'].join('\n')+'\n\n'+autoServerCode();
 }
 var GC_TIMEOUT=20000;
 function gcCheck(j){
-  if(!j||j.ok!==true){var e=new Error(j&&j.error==='token'?'Špatný token. Zkopíruj kód z aplikace znovu a nasaď novou verzi.':'Odpověď není z tvého skriptu.');e.final=true;throw e}
+  if(!j||j.ok!==true){var e=new Error((j&&(j.error==='idk'||j.error==='auto'))?(j.detail||'Chyba.'):j&&j.error==='token'?'Špatný token. Zkopíruj kód z aplikace znovu a nasaď novou verzi.':'Odpověď není z tvého skriptu.');e.final=true;throw e}
   return j;
 }
 function gcViaFetch(u){
@@ -567,8 +591,8 @@ function gcViaFrame(u){
     document.body.appendChild(fr);
   });
 }
-function gcFetch(url,token,from,to){
-  var u=url+(url.indexOf('?')<0?'?':'&')+'t='+encodeURIComponent(token)+'&from='+from+'&to='+to;
+function gcFetch(url,token,from,to,extra){
+  var u=url+(url.indexOf('?')<0?'?':'&')+'t='+encodeURIComponent(token)+'&from='+from+'&to='+to+(extra||'');
   var errs=[];
   function note(n,e){errs.push(n+': '+((e&&e.message)||e))}
   return gcViaFetch(u).catch(function(e1){
@@ -583,11 +607,11 @@ function gcFetch(url,token,from,to){
   });
 }
 /* Čtvrtá, záruční cesta: otevře stránku Google a tlačítkem se vrátí zpět do aplikace s daty v adrese. */
-function gcPage(url){
+function gcPage(url,extra){
   url=url||S.set.cal.url;
   if(!url||!/^https:\/\/script\.google(usercontent)?\.com\//.test(url)){toast('Nejdřív vlož adresu skriptu.');return}
   S.set.cal.url=url;save();
-  var u=url+(url.indexOf('?')<0?'?':'&')+'t='+encodeURIComponent(S.set.cal.token)+'&from='+(Date.now()-120*DAY)+'&to='+(Date.now()+60*DAY)+'&m=page&r='+encodeURIComponent(location.origin+location.pathname);
+  var u=url+(url.indexOf('?')<0?'?':'&')+'t='+encodeURIComponent(S.set.cal.token)+'&from='+(Date.now()-120*DAY)+'&to='+(Date.now()+60*DAY)+(extra||'')+'&m=page&r='+encodeURIComponent(location.origin+location.pathname);
   location.href=u;
 }
 function gcB64(s){
@@ -635,6 +659,145 @@ function gcSync(manual){
    .then(function(res){gcBusy=false;render();if(res&&res.revoked)toast('Odebráno tréninků (zrušené nebo odmítnuté): '+res.revoked);return res});
 }
 /* Hosté z Google Kalendáře, kteří ještě nejsou klienti. */
+/* ---------- iDoklad: vydané faktury podle klientů ---------- */
+function normName(x){return String(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(Boolean).sort().join(' ')}
+function idkMatch(p){
+  var m=S.set.idk.map[p.partnerId];
+  if(m==='ignore')return 'ignore';
+  if(m&&cl(m))return m;
+  var em=String(p.email||'').toLowerCase(),nn=normName(p.partner),c;
+  if(em){c=S.clients.filter(function(x){return x.email===em})[0];if(c)return c.id}
+  if(nn){c=S.clients.filter(function(x){return normName(x.name)===nn})[0];if(c)return c.id}
+  return '';
+}
+function idkApply(j){
+  var g=S.set.idk,added=0,updated=0,now=Date.now();
+  (j.invoices||[]).forEach(function(x){
+    var key='idk'+x.id,inv=S.invoices.filter(function(i){return i.key===key})[0];
+    var cid=idkMatch(x),isNew=!inv;
+    if(!inv){inv={key:key,src:'idoklad',ext:x.id};S.invoices.push(inv);added++}else updated++;
+    var status=x.paid?'Zaplaceno':(inv.status==='Odesláno'?'Odesláno':'Vystaveno');
+    Object.assign(inv,{number:x.number,issued:x.issued||inv.issued||now,due:x.due||x.issued||now,total:x.total,name:x.partner||inv.name||'',email:x.email||'',phone:x.phone||'',desc:x.desc||'',
+      partnerId:x.partnerId,cid:cid==='ignore'?'':cid,ignored:cid==='ignore',status:status,paidOn:x.paidOn||0,sentAt:inv.sentAt||0});
+  });
+  g.last=now;g.err='';g.count=S.invoices.filter(function(i){return i.src==='idoklad'}).length;
+  return {total:(j.invoices||[]).length,added:added,updated:updated,unassigned:idkUnassigned().length};
+}
+function idkUnassigned(){
+  var by={};
+  S.invoices.forEach(function(i){
+    if(i.src!=='idoklad'||i.cid||i.ignored)return;
+    var o=by[i.partnerId]||(by[i.partnerId]={partnerId:i.partnerId,name:i.name,email:i.email,phone:i.phone,count:0,total:0});o.count++;o.total+=i.total;
+  });
+  return Object.keys(by).map(function(k){return by[k]}).sort(function(a,b){return b.total-a.total});
+}
+function idkSync(manual){
+  var c=S.set.cal,g=S.set.idk;
+  if(!c.url||!c.token){if(manual)toast('Nejdřív propoj skript (Nastavení, Google Kalendář).');return Promise.resolve(null)}
+  if(!g.id||!g.secret){if(manual)toast('Nejdřív zadej přístup do iDokladu.');return Promise.resolve(null)}
+  var since=Date.now()-730*DAY;
+  return gcFetch(c.url,c.token,0,0,'&a=idk&since='+since).then(function(j){
+    var r=idkApply(j);save();render();
+    if(manual||r.added)toast('iDoklad: načteno '+r.total+' faktur, nových '+r.added+(r.unassigned?', bez klienta: '+r.unassigned:''));
+    return r;
+  }).catch(function(e){g.err=e.message||'Faktury z iDokladu se nepodařilo načíst.';save();render();if(manual)toast(g.err);return null});
+}
+/* ---------- automatika: stejný kód běží i na serveru v Googlu ---------- */
+var AUTO_SRV="/* ======== AUTOMATIKA: b\u011b\u017e\u00ed na serveru Googlu i bez telefonu ======== */\nconst AUTO_ROUTES = [\"pull\", \"ack\", \"run\", \"trigger\", \"untrigger\", \"status\"];\nlet S = null;\nfunction toast() {}\nfunction save() {}\n\n/*__CORE__*/\n\nfunction ssAuto_() {\n  const P = PropertiesService.getScriptProperties();\n  const id = P.getProperty(\"AUTO_SS\");\n  let ss = null;\n  if (id) { try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; } }\n  if (!ss) {\n    ss = SpreadsheetApp.create(\"Tr\u00e9ninky \u2013 automatika (neupravovat)\");\n    P.setProperty(\"AUTO_SS\", ss.getId());\n  }\n  return ss;\n}\n\nfunction kvGet_(name, dflt) {\n  const sh = ssAuto_().getSheetByName(name);\n  if (!sh || sh.getLastRow() < 1) return dflt;\n  const text = sh.getRange(1, 1, sh.getLastRow(), 1).getValues().map(function (r) { return String(r[0]); }).join(\"\");\n  if (!text) return dflt;\n  try { return JSON.parse(text); } catch (e) { return dflt; }\n}\n\nfunction kvSet_(name, obj) {\n  const ss = ssAuto_();\n  const sh = ss.getSheetByName(name) || ss.insertSheet(name);\n  const text = JSON.stringify(obj), rows = [];\n  for (let i = 0; i < text.length; i += 40000) rows.push([text.slice(i, i + 40000)]);\n  if (!rows.length) rows.push([\"\"]);\n  if (sh.getMaxRows() < rows.length) sh.insertRowsAfter(sh.getMaxRows(), rows.length - sh.getMaxRows());\n  sh.getRange(1, 1, Math.max(sh.getMaxRows(), 1), 1).clearContent();\n  const t = sh.getRange(1, 1, rows.length, 1);\n  t.setNumberFormat(\"@\");\n  t.setValues(rows);\n}\n\nfunction lock_(fn) {\n  const l = LockService.getScriptLock();\n  l.waitLock(30000);\n  try { return fn(); } finally { l.releaseLock(); }\n}\n\nfunction meta_() { return kvGet_(\"meta\", { n: 0, ops: [], run: 0, pushed: 0 }); }\n\nfunction hydrate_(snap) {\n  S = snap || {};\n  S.clients = S.clients || []; S.mails = S.mails || []; S.sms = S.sms || [];\n  S.events = []; S.invoices = []; S.set = S.set || {};\n  S.set.cal = S.set.cal || {}; S.set.mc = S.set.mc || {};\n  S.set.notify = Object.assign({ train: true, out: \"sms\", emailText: EMAIL_OUT_DEF }, S.set.notify || {});\n  S.set.sms = Object.assign({ on: true, text: SMS_DEF }, S.set.sms || {});\n  S.set.auto = Object.assign({ on: false, mode: \"off\", digest: true }, S.set.auto || {});\n  return S;\n}\n\nfunction essential_() {\n  return { v: 1, clients: S.clients, mails: S.mails.slice(0, 150), sms: S.sms.slice(0, 80),\n    set: { trainer: S.set.trainer || \"\", notify: S.set.notify, sms: S.set.sms, mc: S.set.mc, cal: { me: S.set.cal.me || \"\" }, auto: S.set.auto } };\n}\n\nfunction ident_(e) { return [e.kind, e.key, e.date, e.delta, e.note].join(\"|\"); }\n\nfunction brief_() {\n  const b = { logs: {}, arm: {}, mails: {}, sms: {} };\n  S.clients.forEach(function (c) {\n    const m = {};\n    (c.log || []).forEach(function (x) { const k = ident_(x); m[k] = (m[k] || 0) + 1; });\n    b.logs[c.id] = m; b.arm[c.id] = !!c.smsArm;\n  });\n  S.mails.forEach(function (m) { b.mails[m.id] = { sent: m.sent | 0, test: m.test | 0 }; });\n  S.sms.forEach(function (m) { b.sms[m.id] = { sent: m.sent | 0 }; });\n  return b;\n}\n\n/* Rozd\u00edl mezi stavem p\u0159ed b\u011bhem a po n\u011bm jako seznam operac\u00ed, kter\u00e9 aplikace p\u0159i dal\u0161\u00edm spojen\u00ed p\u0159evezme. */\nfunction ops_(before) {\n  const ops = [];\n  S.clients.forEach(function (c) {\n    const prev = before.logs[c.id] || {}, cur = {};\n    (c.log || []).forEach(function (x) {\n      const k = ident_(x); cur[k] = (cur[k] || 0) + 1;\n      if (cur[k] > (prev[k] || 0)) ops.push({ o: \"log+\", c: c.id, e: x });\n    });\n    Object.keys(prev).forEach(function (k) {\n      for (let i = 0; i < prev[k] - (cur[k] || 0); i++) ops.push({ o: \"log-\", c: c.id, k: k });\n    });\n    if (before.arm[c.id] !== undefined && before.arm[c.id] !== !!c.smsArm) ops.push({ o: \"arm\", c: c.id, v: !!c.smsArm });\n  });\n  S.mails.forEach(function (m) {\n    const p = before.mails[m.id];\n    if (!p) ops.push({ o: \"mail+\", m: m });\n    else if (p.sent !== (m.sent | 0) || p.test !== (m.test | 0)) ops.push({ o: \"mail~\", id: m.id, sent: m.sent | 0, test: m.test | 0 });\n  });\n  Object.keys(before.mails).forEach(function (id) { if (!S.mails.some(function (m) { return m.id === id; })) ops.push({ o: \"mail-\", id: id }); });\n  S.sms.forEach(function (m) {\n    const p = before.sms[m.id];\n    if (!p) ops.push({ o: \"sms+\", m: m });\n    else if (p.sent !== (m.sent | 0)) ops.push({ o: \"sms~\", id: m.id, sent: m.sent | 0 });\n  });\n  Object.keys(before.sms).forEach(function (id) { if (!S.sms.some(function (m) { return m.id === id; })) ops.push({ o: \"sms-\", id: id }); });\n  return ops;\n}\n\nfunction describe_(ops, act) {\n  ops.forEach(function (o) {\n    const c = o.c ? S.clients.filter(function (x) { return x.id === o.c; })[0] : null;\n    if (o.o === \"log+\" && c && o.e.kind === \"Tr\u00e9nink\") act.push(\"Zaps\u00e1n tr\u00e9nink: \" + c.name + \" (\" + dd(o.e.date) + \", zb\u00fdv\u00e1 \" + bal(c) + \")\");\n    else if (o.o === \"log+\" && c && o.e.kind === \"M\u011bs\u00ed\u010dn\u00ed platba\") act.push(\"Vy\u00fa\u010dtov\u00e1n m\u011bs\u00edc: \" + c.name + \" (k \u00fahrad\u011b \" + o.e.delta + \")\");\n    else if (o.o === \"log+\" && c && String(o.e.key).indexOf(\"rev_\") === 0) act.push(\"Tr\u00e9nink se nepo\u010d\u00edt\u00e1: \" + c.name + \" (\" + String(o.e.note).slice(0, 80) + \")\");\n    else if (o.o === \"sms+\") { const cc = S.clients.filter(function (x) { return x.id === o.m.cid; })[0]; act.push(\"P\u0159ipravena SMS: \" + (cc ? cc.name : \"klient\") + \" (bal\u00ed\u010dek vy\u010derp\u00e1n)\"); }\n  });\n}\n\nfunction sendMails_(mode, act) {\n  if (mode !== \"me\" && mode !== \"clients\") return;\n  const me = S.set.cal.me || Session.getEffectiveUser().getEmail();\n  let left = Math.min(25, MailApp.getRemainingDailyQuota());\n  S.mails.filter(function (m) { return !m.sent && !(mode === \"me\" && m.test); }).reverse().forEach(function (m) {\n    if (left <= 0) return;\n    if (Date.now() - m.created > 3 * DAY) {\n      if (!m.stale) { m.stale = true; act.push(\"Star\u00fd e-mail ponech\u00e1n k ru\u010dn\u00ed kontrole: \" + m.subject); }\n      return;\n    }\n    try {\n      MailApp.sendEmail({ to: mode === \"clients\" ? m.to : me, subject: (mode === \"clients\" ? \"\" : \"[TEST pro \" + m.to + \"] \") + m.subject, body: m.body, name: S.set.trainer || \"\" });\n      if (mode === \"clients\") m.sent = Date.now(); else m.test = Date.now();\n      left--;\n      act.push((mode === \"clients\" ? \"Odesl\u00e1n e-mail klientovi: \" : \"Testovac\u00ed e-mail odesl\u00e1n tob\u011b: \") + m.subject + \" (\" + m.to + \")\");\n    } catch (err) { act.push(\"E-mail se nepoda\u0159ilo odeslat: \" + m.subject); }\n  });\n}\n\nfunction autoRun() {\n  return lock_(function () {\n    const shadow = kvGet_(\"shadow\", null);\n    if (!shadow) return { ok: false, error: \"auto\", detail: \"Server zat\u00edm nem\u00e1 data z aplikace. Otev\u0159i aplikaci a zapni automatiku.\" };\n    hydrate_(shadow);\n    if (!S.set.auto.on) return { ok: true, skipped: true };\n    const before = brief_(), act = [];\n    const cal = data_({ t: TOKEN });\n    if (cal.ok) gcApply(cal); else act.push(\"Kalend\u00e1\u0159 se nepoda\u0159ilo na\u010d\u00edst.\");\n    smsCheck();\n    sendMails_(S.set.auto.mode, act);\n    const ops = ops_(before);\n    const meta = meta_();\n    ops.forEach(function (o) { meta.n++; meta.ops.push({ i: meta.n, o: o }); });\n    if (meta.ops.length > 600) meta.ops = meta.ops.slice(-600);\n    describe_(ops, act);\n    meta.run = Date.now();\n    kvSet_(\"shadow\", essential_());\n    kvSet_(\"meta\", meta);\n    if (act.length) {\n      const logA = kvGet_(\"activity\", []);\n      act.forEach(function (s) { logA.unshift({ t: Date.now(), s: s }); });\n      kvSet_(\"activity\", logA.slice(0, 60));\n    }\n    const newSms = ops.filter(function (o) { return o.o === \"sms+\"; });\n    if (newSms.length && S.set.auto.digest !== false) {\n      try {\n        MailApp.sendEmail({ to: S.set.cal.me || Session.getEffectiveUser().getEmail(), subject: \"Tr\u00e9ninky: \u010dek\u00e1 SMS klientovi (\" + newSms.length + \")\",\n          body: act.filter(function (s) { return s.indexOf(\"P\u0159ipravena SMS\") === 0; }).join(\"\\n\") + \"\\n\\nOtev\u0159i aplikaci Tr\u00e9ninky, z\u00e1lo\u017eku Zpr\u00e1vy, a SMS ode\u0161li.\", name: \"Tr\u00e9ninky\" });\n      } catch (e) {}\n    }\n    return { ok: true, ops: ops.length };\n  });\n}\n\nfunction pull_() {\n  const meta = meta_();\n  return { ok: true, ops: meta.ops.slice(0, 250), pending: meta.ops.length, run: meta.run, activity: kvGet_(\"activity\", []).slice(0, 25), pushed: meta.pushed };\n}\n\nfunction auto_(p) {\n  if (p.a === \"pull\") return lock_(pull_);\n  if (p.a === \"ack\") {\n    return lock_(function () {\n      const ids = String(p.ids || \"\").split(\",\").map(Number), meta = meta_();\n      meta.ops = meta.ops.filter(function (x) { return ids.indexOf(x.i) < 0; });\n      kvSet_(\"meta\", meta);\n      return { ok: true, pending: meta.ops.length, ops: [] };\n    });\n  }\n  if (p.a === \"run\") { const r = autoRun(); return r.ok === false ? r : lock_(pull_); }\n  if (p.a === \"trigger\" || p.a === \"untrigger\") {\n    ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === \"autoRun\") ScriptApp.deleteTrigger(t); });\n    if (p.a === \"trigger\") ScriptApp.newTrigger(\"autoRun\").timeBased().everyHours(1).create();\n    return { ok: true, ops: [], trigger: p.a === \"trigger\" };\n  }\n  const trg = ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === \"autoRun\"; }).length;\n  return { ok: true, ops: [], triggers: trg, run: meta_().run };\n}\n\nfunction frameReply_(id, obj) {\n  const safe = JSON.stringify(obj).replace(/</g, \"\\\\u003c\");\n  return HtmlService.createHtmlOutput(\"<script>try{top.postMessage({gcFrame:\\\"\" + id + \"\\\",data:\" + safe + \"},\\\"*\\\")}catch(x){}<\\/script>\")\n    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);\n}\n\n/* Aplikace ode\u0161le sv\u016fj stav formul\u00e1\u0159em (bez omezen\u00ed prohl\u00ed\u017ee\u010de). Server ho ulo\u017e\u00ed a znovu pou\u017eije nepotvrzen\u00e9 operace. */\nfunction doPost(e) {\n  const p = (e && e.parameter) || {};\n  const id = /^[A-Za-z0-9_]+$/.test(p.i || \"\") ? p.i : \"\";\n  let out = { ok: false, error: \"token\" };\n  if (p.t === TOKEN && p.a === \"push\") {\n    try {\n      out = lock_(function () {\n        const meta = meta_();\n        hydrate_(JSON.parse(p.data));\n        applyOps(S, meta.ops.map(function (x) { return x.o; }));\n        kvSet_(\"shadow\", essential_());\n        meta.pushed = Date.now();\n        kvSet_(\"meta\", meta);\n        return { ok: true, pending: meta.ops.length, ops: [] };\n      });\n    } catch (err) { out = { ok: false, error: \"auto\", detail: \"Ulo\u017een\u00ed stavu na serveru selhalo: \" + err }; }\n  }\n  return frameReply_(id, out);\n}\n\nfunction route_(p) {\n  if (p.a === \"idk\") return p.t === TOKEN ? idk_(p) : { ok: false, error: \"token\" };\n  if (AUTO_ROUTES.indexOf(p.a) >= 0) return p.t === TOKEN ? auto_(p) : { ok: false, error: \"token\" };\n  return data_(p);\n}\n";
+var CORE_FNS=['pad','uid','dshort','dd','ym','bal','cl','hello','sign','trainings','remaining','enqueue','tplFill','smsText','outMailBody','outChannel','outEmail','outSms','revokeTraining','revokeByCancelled','mailAfter','mailMonthly','mStart','mAdd','mLabel','effMonth','monthEvents','monthCancelled','monthStatsFor','monthStats','monthDue','bill','sync','runAll','smsCheck','gcApply','applyOps'];
+function coreSource(){
+  return CORE_FNS.map(function(n){var src=String(window[n]);return /^function\s+\w/.test(src)?src:'var '+n+'='+src+';'}).join('\n\n');
+}
+function autoServerCode(){
+  var consts='const DAY = 864e5;\nconst MONTHS = '+JSON.stringify(MONTHS)+';\nconst SMS_DEF = '+JSON.stringify(SMS_DEF)+';\nconst EMAIL_OUT_DEF = '+JSON.stringify(EMAIL_OUT_DEF)+';\n';
+  return consts+AUTO_SRV.replace('/*__CORE__*/',function(){return coreSource()});
+}
+/* Operace ze serveru se použijí opakovaně bez škody (totéž dělá server po odeslání stavu z telefonu). */
+function applyOps(st,ops){
+  var idn=function(e){return [e.kind,e.key,e.date,e.delta,e.note].join('|')};
+  (ops||[]).forEach(function(o){
+    var c=o.c?st.clients.filter(function(x){return x.id===o.c})[0]:null;
+    if(o.o==='log+'&&c){if(!c.log.some(function(x){return idn(x)===idn(o.e)}))c.log.push(o.e)}
+    else if(o.o==='log-'&&c){for(var i=0;i<c.log.length;i++)if(idn(c.log[i])===o.k){c.log.splice(i,1);break}}
+    else if(o.o==='arm'&&c)c.smsArm=o.v;
+    else if(o.o==='mail+'){if(!st.mails.some(function(m){return m.id===o.m.id}))st.mails.unshift(o.m)}
+    else if(o.o==='mail~'){var m1=st.mails.filter(function(m){return m.id===o.id})[0];if(m1){m1.sent=o.sent;m1.test=o.test}}
+    else if(o.o==='mail-')st.mails=st.mails.filter(function(m){return m.id!==o.id});
+    else if(o.o==='sms+'){if(!st.sms.some(function(m){return m.id===o.m.id}))st.sms.unshift(o.m)}
+    else if(o.o==='sms~'){var s1=st.sms.filter(function(m){return m.id===o.id})[0];if(s1)s1.sent=o.sent}
+    else if(o.o==='sms-')st.sms=st.sms.filter(function(m){return m.id!==o.id});
+  });
+}
+function snapState(){
+  var a=S.set.auto;
+  return {v:1,clients:S.clients,mails:S.mails.slice(0,150),sms:S.sms.slice(0,80),
+    set:{trainer:S.set.trainer,notify:S.set.notify,sms:S.set.sms,mc:S.set.mc,cal:{me:S.set.cal.me||''},auto:{on:a.on,mode:a.mode,digest:a.digest!==false}}};
+}
+/* Odeslání stavu na server formulářem ve skrytém rámci (nepotřebuje CORS). Odpověď přijde zprávou. */
+function autoPost(url,fields){
+  return new Promise(function(res,rej){
+    var id='p'+Date.now()+Math.floor(Math.random()*1e6),done=false,t,fr=document.createElement('iframe'),fm=document.createElement('form');
+    function end(){done=true;clearTimeout(t);window.removeEventListener('message',onMsg);if(fr.parentNode)fr.parentNode.removeChild(fr);if(fm.parentNode)fm.parentNode.removeChild(fm)}
+    function onMsg(e){var d=e.data;if(done||!d||d.gcFrame!==id)return;end();res(d.data)}
+    window.addEventListener('message',onMsg);
+    t=setTimeout(function(){if(done)return;end();rej(new Error('Server neodpověděl. Zkontroluj, že máš nový kód skriptu (Nastavení, Automatika, Zobrazit kód) a nasazenou novou verzi.'))},40000);
+    fr.name=id;fr.style.cssText='position:absolute;width:1px;height:1px;border:0;opacity:0;pointer-events:none';fr.setAttribute('aria-hidden','true');
+    fm.method='POST';fm.action=url;fm.target=id;fm.style.display='none';
+    Object.keys(fields).concat(['i']).forEach(function(k){var i=document.createElement('textarea');i.name=k;i.value=k==='i'?id:fields[k];fm.appendChild(i)});
+    document.body.appendChild(fr);document.body.appendChild(fm);fm.submit();
+  });
+}
+function autoPush(snap){
+  var c=S.set.cal,tr=window.AUTO_TRANSPORT||autoPost;
+  return tr(c.url,{t:c.token,a:'push',data:snap}).then(function(j){if(!j||j.ok!==true)throw new Error((j&&j.detail)||'Server nepřijal data.');return j});
+}
+function autoApply(j){
+  var a=S.set.auto,c=S.set.cal;
+  if(!j||!Array.isArray(j.ops))throw new Error('Skript v Googlu je starší verze. Zkopíruj kód znovu (Nastavení, Automatika, Zobrazit kód) a nasaď novou verzi.');
+  var ids=j.ops.map(function(x){return x.i});
+  if(ids.length)applyOps(S,j.ops.map(function(x){return x.o}));
+  a.last=j.run||a.last;a.pending=Math.max(0,(j.pending||0)-ids.length);a.log=j.activity||a.log;a.err='';
+  if(!ids.length)return Promise.resolve(0);
+  save();
+  return gcFetch(c.url,c.token,0,0,'&a=ack&ids='+ids.join(',')).then(function(){return ids.length});
+}
+function autoPull(){var c=S.set.cal;return gcFetch(c.url,c.token,0,0,'&a=pull').then(autoApply)}
+var autoBusy=false,autoTimer=null,autoLastPush='';
+function autoSoon(){var a=S.set&&S.set.auto;if(!a||!a.on||!S.set.cal.url)return;clearTimeout(autoTimer);autoTimer=setTimeout(function(){autoSync(false)},20000)}
+function autoSync(manual){
+  var a=S.set.auto,c=S.set.cal;if(!a.on||!c.url||!c.token||autoBusy)return Promise.resolve(null);
+  autoBusy=true;
+  return autoPull().then(function(n){
+    var snap=JSON.stringify(snapState());
+    if(snap===autoLastPush&&!manual)return n;
+    return autoPush(snap).then(function(){autoLastPush=snap;return n});
+  }).then(function(n){autoBusy=false;if(n)toast('Automatika: převzato změn '+n);render();return n})
+   .catch(function(e){autoBusy=false;a.err=e.message||'Automatika se nepodařila.';render();return null});
+}
+function autoEnable(){
+  var c=S.set.cal,a=S.set.auto;
+  if(!c.url||!c.token){toast('Nejdřív propoj skript (Nastavení, Google Kalendář).');return}
+  a.on=true;a.err='';save();autoBusy=true;toast('Zapínám automatiku…');render();
+  return autoPush(JSON.stringify(snapState()))
+   .then(function(){return gcFetch(c.url,c.token,0,0,'&a=trigger')})
+   .then(function(j){if(!j||j.trigger!==true)throw new Error('Skript v Googlu je starší verze. Zkopíruj kód znovu (Zobrazit kód) a nasaď novou verzi.');return gcFetch(c.url,c.token,0,0,'&a=run')})
+   .then(function(j){autoBusy=false;return autoApply(j)})
+   .then(function(){autoLastPush=JSON.stringify(snapState());save();toast('Automatika zapnuta. Server běží každou hodinu i bez telefonu.');render()})
+   .catch(function(e){autoBusy=false;a.on=false;a.err=e.message||'Automatiku se nepodařilo zapnout.';save();toast(a.err);render()});
+}
+function autoDisable(){
+  var c=S.set.cal,a=S.set.auto;a.on=false;save();render();
+  return autoPush(JSON.stringify(snapState())).catch(function(){}).then(function(){return gcFetch(c.url,c.token,0,0,'&a=untrigger')}).then(function(){toast('Automatika vypnuta.')},function(){toast('Automatika vypnuta v aplikaci. Server se zastaví při dalším spojení.')});
+}
+function autoRunNow(){
+  var c=S.set.cal;if(!S.set.auto.on){toast('Nejdřív zapni automatiku.');return}
+  toast('Spouštím server…');
+  return autoPush(JSON.stringify(snapState())).then(function(){return gcFetch(c.url,c.token,0,0,'&a=run')}).then(autoApply).then(function(n){toast('Hotovo'+(n?'. Převzato změn: '+n:''));render()}).catch(function(e){S.set.auto.err=e.message;toast(e.message);render()});
+}
+function autoSheet(){
+  var a=S.set.auto,l=a.log||[];
+  openSheet('<h3>Co udělala automatika</h3><div class="sub" style="margin:0 4px 10px">Poslední běh serveru: '+ago(a.last)+'</div><div class="card">'+(l.length?l.map(function(x){return '<div class="hist"><div><div style="font-size:14px">'+esc(x.s)+'</div><div class="sub">'+dd(x.t)+' '+tt(x.t)+'</div></div></div>'}).join(''):'<div class="kv sub">Zatím nic. Server zapisuje tréninky a posílá e-maily při každém hodinovém běhu.</div>')+'</div><button class="ghost" data-a="closeSheet">Zavřít</button>');
+}
 function gcFound(){
   var g=S.set.cal,known={},ign={},map={};
   S.clients.forEach(function(c){known[c.email]=1});(g.ignore||[]).forEach(function(x){ign[x]=1});
@@ -680,7 +843,8 @@ function toIban(acc){
   return 'CZ'+('0'+(98-rem)).slice(-2)+body;
 }
 var billingReady=function(){var b=S.set.b;return !!(b.name&&toIban(b.account))};
-function nextNumber(){var y=String(new Date().getFullYear()),max=0;S.invoices.forEach(function(i){if(i.number.indexOf(y)===0&&i.number.length===7)max=Math.max(max,+i.number.slice(4))});return y+('00'+(max+1)).slice(-3)}
+function invByKey(k){return S.invoices.filter(function(i){return (i.key||i.number)===k})[0]}
+function nextNumber(){var y=String(new Date().getFullYear()),max=0;S.invoices.forEach(function(i){if(i.src!=='idoklad'&&i.number.indexOf(y)===0&&i.number.length===7)max=Math.max(max,+i.number.slice(4))});return y+('00'+(max+1)).slice(-3)}
 function calc(lines,rate){var b=0;lines.forEach(function(l){l.total=Math.round(l.qty*l.price*100)/100;b+=l.total});b=Math.round(b*100)/100;var v=Math.round(b*rate)/100;return {base:b,vat:v,total:Math.round((b+v)*100)/100}}
 function buildInvoice(c,raw){
   var b=S.set.b;
@@ -841,7 +1005,8 @@ function detailView(){
   h+='<h2>Nastavení klienta</h2><div class="card"><div class="kv"><span>Jméno</span><input type="text" data-f="name" value="'+esc(c.name)+'"></div><div class="kv"><span>Oslovení</span><input type="text" data-f="greeting" value="'+esc(c.greeting)+'" placeholder="např. Jano"></div><div class="kv"><span>E-mail</span><input type="text" data-f="email" value="'+esc(c.email)+'" autocapitalize="off"></div><div class="kv"><span>Telefon (pro SMS)</span><input type="text" inputmode="tel" data-f="phone" value="'+esc(c.phone||'')+'" placeholder="+420 777 123 456"></div>'+(c.type!=='Měsíční'?'<div class="kv"><span>Upozornění při vyčerpání</span><select data-f="notify">'+[['default','Výchozí'],['email','E-mail'],['sms','SMS'],['both','E-mail i SMS'],['none','Nic']].map(function(o){return '<option value="'+o[0]+'"'+((c.notify||'default')===o[0]?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>':'')+'<div class="kv"><span>Typ</span><select data-f="type"><option'+(c.type==='Balíček'?' selected':'')+'>Balíček</option><option'+(c.type==='Měsíční'?' selected':'')+'>Měsíční</option></select></div><div class="kv"><span>Odečítat od</span><input type="date" data-f="trackFrom" value="'+iso(c.trackFrom)+'"></div><div class="kv"><span>Cena za trénink (Kč)</span><input type="number" inputmode="decimal" data-f="price" value="'+(c.price||'')+'" placeholder="'+(S.set.b.price||0)+'"></div><div class="kv"><span>Fakturační údaje</span><textarea data-f="billing" placeholder="Adresa, IČO">'+esc(c.billing||'')+'</textarea></div><div class="kv"><span>Aktivní</span><button class="sw'+(c.active?' on':'')+'" data-a="toggleActive"></button></div></div>';
   var invs=S.invoices.filter(function(i){return i.cid===c.id}).sort(function(a,b){return b.issued-a.issued});
   if(c.type!=='Měsíční')h+=cancelledSection(c);
-  h+='<h2>Faktury</h2><div class="card">'+(invs.length?invs.map(invRow).join(''):'<div class="kv sub">Zatím žádné faktury.</div>')+'</div>';
+  var unp=invs.filter(function(i){return i.status!=='Zaplaceno'}).reduce(function(a,i){return a+i.total},0);
+  h+='<h2>Faktury'+(invs.length?' · '+invs.length:'')+'</h2>'+(unp>0?'<div class="sub" style="margin:-4px 6px 6px">Nezaplaceno: '+money(unp)+'</div>':'')+'<div class="card">'+(invs.length?invs.map(invRow).join(''):'<div class="kv sub">Zatím žádné faktury.</div>')+'</div>';
   h+='<h2>Historie</h2><div class="card">';
   var hist=c.log.slice().sort(function(a,b){return b.date-a.date}).slice(0,60);
   if(!hist.length)h+='<div class="kv sub">Zatím žádné záznamy.</div>';
@@ -879,7 +1044,7 @@ function invChip(i){
   if(i.due<Date.now())return '<span class="chip bad">Po splatnosti</span>';
   return '<span class="chip '+(i.status==='Odesláno'?'':'wait')+'">'+esc(i.status)+'</span>';
 }
-function invRow(i){return '<button class="item" data-a="invOpen" data-n="'+esc(i.number)+'"><div class="rt"><div><div class="nm" style="font-size:16px">'+esc(i.number)+' · '+esc(i.name)+'</div><div class="sub">Splatnost '+dd(i.due)+'</div></div><div style="text-align:right"><b>'+money(i.total)+'</b><div>'+invChip(i)+'</div></div></div></button>'}
+function invRow(i){return '<button class="item" data-a="invOpen" data-n="'+esc(i.key||i.number)+'"><div class="rt"><div><div class="nm" style="font-size:16px">'+esc(i.number)+' · '+esc(i.name)+(i.src==='idoklad'?' <span class="chip">iDoklad</span>':'')+'</div><div class="sub">Splatnost '+dd(i.due)+'</div></div><div style="text-align:right"><b>'+money(i.total)+'</b><div>'+invChip(i)+'</div></div></div></button>'}
 function invoicesView(){
   var h=bar('Faktury','','');
   if(!S.invoices.length)return h+'<div class="empty">Zatím žádné faktury.<br>Vystavíš je v detailu klienta.</div>';
@@ -888,7 +1053,7 @@ function invoicesView(){
 }
 
 function mailsView(){
-  var h=bar('E-maily a SMS','','')+'<div class="sub sb">Zprávy čekají tady. Klepni, otevře se Mail nebo Zprávy s hotovým textem a ty jen potvrdíš odeslání.</div>';
+  var h=bar('E-maily a SMS','','')+'<div class="sub sb">'+(S.set.auto.on&&S.set.auto.mode!=='off'?'Automatika posílá e-maily sama ('+(S.set.auto.mode==='clients'?'klientům':'testovací režim, jen tobě')+'). SMS odešli klepnutím.':'Zprávy čekají tady. Klepni, otevře se Mail nebo Zprávy s hotovým textem a ty jen potvrdíš odeslání.')+'</div>';
   if(!S.mails.length&&!S.sms.length)return h+'<div class="empty">Zatím nic.<br>E-maily vzniknou po zapsání tréninku nebo prodeji balíčku. SMS se připraví, když klientovi dojdou tréninky z balíčku.</div>';
   if(S.sms.length){
     h+='<h2>SMS</h2><div class="card">';
@@ -913,15 +1078,25 @@ function settingsView(){
   h+='</div>';
   var g=S.set.cal;
   h+='<h2>Google Kalendář</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(g.url&&!g.err?'ok':'wait')+'">'+(g.url?(g.err?'chyba':'připojeno'):'nepřipojeno')+'</span></div>'+(g.url?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(g.last)+'</span></div>'+(g.err?'<div class="kv sub" style="color:var(--red)">'+esc(g.err)+'</div>':'')+'<button class="act" data-a="gcNow">Načíst teď</button><button class="act" data-a="orph">Zkontrolovat zapsané tréninky s kalendářem</button><button class="act" data-a="gcPage">Načíst záložním způsobem (otevře stránku Google)</button><button class="act" data-a="gcConnect">Zobrazit postup a kód</button><button class="act del" data-a="gcOff">Odpojit</button>':'<button class="act" data-a="gcConnect">Připojit Google Kalendář</button>')+'</div>';
+  var au=S.set.auto,mmode=[['off','Vypnuto','Jen zapisuje tréninky'],['me','Test','E-maily chodí jen tobě'],['clients','Klientům','Ostrý provoz']];
+  h+='<h2>Automatika</h2><div class="card"><div class="kv"><span>Běh bez otevřené aplikace</span><span class="chip '+(au.on?(au.err?'bad':'ok'):'wait')+'">'+(au.on?(au.err?'chyba':'zapnuto'):'vypnuto')+'</span></div>'+
+   (au.on?'<div class="kv"><span>Poslední běh serveru</span><span class="sub">'+ago(au.last)+'</span></div>'+(au.err?'<div class="kv sub" style="color:var(--red)">'+esc(au.err)+'</div>':'')+
+   '<div class="kv" style="display:block"><div style="margin-bottom:12px">E-maily klientům posílá server <span class="sub">· '+mmode.filter(function(x){return x[0]===au.mode})[0][1]+'</span></div><div class="stg" style="grid-template-columns:repeat(3,1fr)">'+mmode.map(function(x){return '<button class="stb'+(au.mode===x[0]?' on':'')+'" data-a="autoMode" data-v="'+x[0]+'"><span>'+x[1]+'</span><span class="sub" style="font-weight:400;font-size:11px">'+x[2]+'</span></button>'}).join('')+'</div></div>'+
+   '<div class="kv"><span>E-mail mi, když čeká SMS</span><button class="sw'+(au.digest!==false?' on':'')+'" data-a="autoDigest" aria-label="E-mail o SMS"></button></div>'+
+   '<button class="act" data-a="autoRun">Spustit server teď</button><button class="act" data-a="autoLog">Co automatika udělala</button><button class="act" data-a="gcConnect">Zobrazit kód skriptu</button><button class="act del" data-a="autoOff">Vypnout automatiku</button>'
+   :'<button class="act" data-a="autoOn">Zapnout automatiku</button><button class="act" data-a="gcConnect">Zobrazit kód skriptu</button>')+'</div><div class="sub" style="margin:0 16px 4px">Server v Googlu každou hodinu načte kalendář, zapíše tréninky, vyřeší zrušené a pošle e-maily. Na SMS pro klienty tě upozorní e-mailem. Aplikace převezme výsledek při dalším otevření. SMS klientům se pořád odesílá v aplikaci Zprávy. Vyžaduje nový kód skriptu.</div>';
   var nf=S.set.notify,chs=[['email','E-mail','Mail s hotovým textem'],['sms','SMS','Zprávy s hotovým textem'],['both','E-mail i SMS','Obojí současně'],['none','Nic','Bez upozornění']];
   h+='<h2>Upozornění klientům</h2><div class="card"><div class="kv"><span>E-mail po každém tréninku</span><button class="sw'+(nf.train!==false?' on':'')+'" data-a="trainMail" aria-label="E-mail po tréninku"></button></div><div class="kv" style="display:block"><div style="margin-bottom:12px">Když klientovi dojde balíček, poslat <span class="sub">· výchozí pro všechny</span></div><div class="stg">'+chs.map(function(x){return '<button class="stb'+(nf.out===x[0]?' on':'')+'" data-a="outCh" data-v="'+x[0]+'"><span>'+x[1]+'</span><span class="sub" style="font-weight:400">'+x[2]+'</span></button>'}).join('')+'</div></div></div>'+
   '<div class="sub" style="margin:0 16px 4px">U každého klienta můžeš kanál změnit (detail klienta, Upozornění při vyčerpání). E-maily čekají v záložce Zprávy a odešlou se přes Mail. SMS se připraví a odešlou přes Zprávy, iPhone neumí posílat potichu na pozadí. Telefon doplň v detailu klienta.</div>';
   h+='<h2>Texty upozornění</h2><div class="card"><div class="kv" style="display:block"><div class="sub" style="margin-bottom:8px">Text SMS. Zástupné znaky: {ahoj} (např. Ahoj Jano,), {jméno}, {podpis}</div><textarea class="big" data-f="smsText" style="color:var(--ink);min-height:96px">'+esc(S.set.sms.text)+'</textarea></div><div class="kv" style="display:block"><div class="sub" style="margin-bottom:8px">Text e-mailu o vyčerpání balíčku</div><textarea class="big" data-f="emailOutText" style="color:var(--ink);min-height:120px">'+esc(nf.emailText)+'</textarea></div></div>';
+  var ik=S.set.idk,ua=idkUnassigned().length;
+  h+='<h2>iDoklad</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(ik.id&&ik.secret?(ik.err?'bad':'ok'):'wait')+'">'+(ik.id&&ik.secret?(ik.err?'chyba':'zadáno'):'nepřipojeno')+'</span></div>'+
+   (ik.id&&ik.secret?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(ik.last)+(ik.count?' · faktur '+ik.count:'')+'</span></div>'+(ik.err?'<div class="kv sub" style="color:var(--red)">'+esc(ik.err)+'</div>':'')+'<button class="act" data-a="idkSync">Načíst faktury z iDokladu</button>'+(ua?'<button class="act" data-a="idkAssign">Přiřadit klienty ('+ua+')</button>':'')+'<button class="act" data-a="idkSetup">Změnit přístup a zobrazit kód skriptu</button><button class="act del" data-a="idkOff">Odpojit</button>':'<button class="act" data-a="idkSetup">Zadat přístup do iDokladu</button>')+'</div><div class="sub" style="margin:0 16px 4px">Faktury se načtou do záložky Faktury a přiřadí klientům podle e-mailu nebo jména. Potřebuje propojený skript v Googlu.</div>';
   h+='<h2>Fakturace</h2><div class="card"><div class="kv"><span>Fakturační údaje</span><span class="chip '+(billingReady()?'ok':'wait')+'">'+(billingReady()?'vyplněno':'chybí')+'</span></div><button class="act" data-a="billSet">Upravit fakturační údaje</button></div>';
   h+='<h2>Klienti</h2><div class="card"><button class="act" data-a="arch">Archivovaní klienti ('+S.clients.filter(function(c){return !c.active}).length+')</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.10</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.12</div>';
   return h;
 }
 
@@ -1048,8 +1223,26 @@ function openMailto(to,subject,body){
   a.href='mailto:'+to+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
   document.body.appendChild(a);a.click();document.body.removeChild(a);
 }
+function invExtSheet(inv){
+  var c=inv.cid?cl(inv.cid):null,paid=inv.status==='Zaplaceno';
+  openSheet('<h3>Faktura '+esc(inv.number)+'</h3><div class="sub" style="margin:0 4px 10px">Z iDokladu. Stav a částka se přebírají při dalším načtení.</div><div class="card"><div class="kv"><span>Klient</span><b>'+(c?esc(c.name):'nepřiřazeno')+'</b></div><div class="kv"><span>Odběratel v iDokladu</span><span class="sub">'+esc(inv.name||'')+'</span></div><div class="kv"><span>Částka</span><b>'+money(inv.total)+'</b></div><div class="kv"><span>Vystaveno</span><span>'+dd(inv.issued)+'</span></div><div class="kv"><span>Splatnost</span><span>'+dd(inv.due)+'</span></div><div class="kv"><span>Stav</span>'+invChip(inv)+'</div>'+(paid&&inv.paidOn?'<div class="kv"><span>Zaplaceno</span><span>'+dd(inv.paidOn)+'</span></div>':'')+(inv.desc?'<div class="kv sub">'+esc(inv.desc)+'</div>':'')+'</div>'+
+   '<button class="pri" data-a="idkReassign" data-n="'+esc(inv.key)+'">'+(c?'Změnit přiřazení klienta':'Přiřadit klienta')+'</button><a class="ghost" href="https://app.idoklad.cz/" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none">Otevřít iDoklad</a><button class="ghost" data-a="closeSheet">Zavřít</button>');
+}
+function idkAssignSheet(onlyKey){
+  var list=onlyKey?(function(){var i=invByKey(onlyKey);return i?[{partnerId:i.partnerId,name:i.name,email:i.email,phone:i.phone,count:S.invoices.filter(function(x){return x.partnerId===i.partnerId&&x.src==='idoklad'}).length,total:i.total}]:[]})():idkUnassigned();
+  if(!list.length){closeSheet();toast('Všechny faktury z iDokladu mají klienta.');return}
+  var opts='<option value="">Nepřiřazovat</option>'+S.clients.filter(function(c){return c.active}).map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+'</option>'}).join('')+'<option value="ignore">Ignorovat (není klient)</option>';
+  openSheet('<h3>Faktury z iDokladu</h3><div class="sub" style="margin:0 4px 10px;line-height:1.5">Vyber klienta pro každého odběratele. Volba se zapamatuje i pro další faktury.</div><div class="card">'+
+   list.map(function(p,i){return '<div class="kv" style="display:block"><div class="nm" style="font-size:15px">'+esc(p.name||'(bez jména)')+'</div><div class="sub" style="margin-bottom:8px">'+esc(p.email||'bez e-mailu')+' · faktur '+p.count+' · '+money(p.total)+'</div><select class="in" id="idkSel'+i+'" data-p="'+esc(p.partnerId)+'">'+opts+'</select></div>'}).join('')+
+   '</div><button class="pri" data-a="idkAssignSave">Uložit přiřazení</button><button class="ghost" data-a="closeSheet">Zavřít</button>');
+}
+function idkSetupSheet(){
+  var g=S.set.idk;
+  openSheet('<h3>Přístup do iDokladu</h3><div class="sub" style="margin:0 4px 10px;line-height:1.5">V iDokladu najdeš Client ID a Client Secret v nastavení účtu (propojení, API pro vývojáře, dokumentace app.idoklad.cz/developer). Hodnoty zůstanou jen v tvém telefonu a v tvém skriptu v Googlu. Přístup k API může vyžadovat placený tarif iDokladu.</div><div class="card"><div class="kv"><span>Client ID</span><input type="text" id="idkId" autocapitalize="off" autocomplete="off" value="'+esc(g.id)+'"></div><div class="kv"><span>Client Secret</span><input type="text" id="idkSecret" autocapitalize="off" autocomplete="off" value="'+esc(g.secret)+'"></div></div><div class="sub" style="margin:0 4px;line-height:1.5">Po uložení se kód skriptu v Googlu změní. Zkopíruj ho znovu (další okno), vlož do skriptu a nasaď novou verzi. Adresa se nezmění.</div><div class="err" id="idkErr"></div><button class="pri" data-a="idkSave">Uložit a zobrazit kód skriptu</button><button class="ghost" data-a="closeSheet">Zavřít</button>');
+}
 function invOpen(n){
-  var inv=S.invoices.find(function(i){return i.number===n});if(!inv)return;
+  var inv=invByKey(n);if(!inv)return;
+  if(inv.src==='idoklad'){invExtSheet(inv);return}
   var paid=inv.status==='Zaplaceno';
   openSheet('<h3>Faktura '+esc(inv.number)+'</h3><div class="invwrap">'+invoiceFragment(inv)+'</div><div class="card"><button class="act" data-a="invPrint" data-n="'+esc(n)+'">Uložit jako PDF / vytisknout</button><button class="act" data-a="invShare" data-n="'+esc(n)+'">Sdílet soubor faktury</button><button class="act" data-a="invMail" data-n="'+esc(n)+'">Poslat e-mailem klientovi</button><button class="act" data-a="invPaid" data-n="'+esc(n)+'" data-p="'+(paid?0:1)+'">'+(paid?'Vrátit mezi nezaplacené':'Označit jako zaplacené')+'</button></div><div class="sub" style="margin:0 4px">PDF: v dialogu tisku sdílej nebo ulož (na iPhonu přiblížením náhledu). E-mail otevře Mail s textem, PDF případně připoj ručně.</div><button class="ghost" data-a="closeSheet">Zavřít</button>');
 }
@@ -1058,7 +1251,7 @@ function billSheet(){
   openSheet('<h3>Fakturační údaje</h3><div class="sub" style="margin:0 4px 8px">Údaje dodavatele, které se objeví na každé faktuře.</div><div class="card"><div class="kv"><span>Jméno / firma</span><input type="text" id="bName" value="'+esc(b.name)+'"></div><div class="kv"><span>Adresa</span><textarea id="bAddr" placeholder="Ulice, PSČ, město">'+esc(b.address)+'</textarea></div><div class="kv"><span>IČO</span><input type="text" id="bIco" inputmode="numeric" value="'+esc(b.ico)+'"></div><div class="kv"><span>DIČ</span><input type="text" id="bDic" value="'+esc(b.dic)+'"></div><div class="kv"><span>Účet / IBAN</span><input type="text" id="bAcc" placeholder="123456789/0800" value="'+esc(b.account)+'"></div><div class="kv"><span>Plátce DPH (21 %)</span><button class="sw'+(b.vat?' on':'')+'" data-a="bvat"></button></div><div class="kv"><span>Splatnost (dny)</span><input type="number" id="bDue" inputmode="numeric" value="'+esc(b.dueDays)+'"></div><div class="kv"><span>Cena tréninku (Kč)</span><input type="number" id="bPrice" inputmode="decimal" value="'+(b.price||'')+'"></div><div class="kv"><span>QR platba na faktuře</span><button class="sw'+(b.qr?' on':'')+'" data-a="bqr"></button></div><div class="kv"><span>Poznámka v patičce</span><textarea id="bNote" placeholder="např. Fyzická osoba zapsaná v živnostenském rejstříku.">'+esc(b.note)+'</textarea></div></div><div class="sub" style="margin:0 4px">QR kód se vytváří přímo v telefonu, nic se neposílá na internet.</div><div class="err" id="bErr"></div><button class="pri" data-a="billSave">Uložit</button><button class="ghost" data-a="closeSheet">Zrušit</button>');
 }
 
-function backupText(){return JSON.stringify(S)}
+function backupText(){return JSON.stringify(S,function(k,v){return k==='secret'?undefined:v})}
 function backup(){
   var txt=backupText(),name='treninky-zaloha-'+iso(Date.now())+'.json';
   try{
@@ -1117,6 +1310,32 @@ function act(a,el){
     case 'accent':S.set.theme.accent=d.v;save();break;
     case 'bgcol':S.set.theme.bg=d.v;save();break;
     case 'orph':orphSheet(d.c);return;
+    case 'autoOn':autoEnable();return;
+    case 'autoOff':autoDisable();return;
+    case 'autoRun':autoRunNow();return;
+    case 'autoLog':autoSheet();return;
+    case 'autoDigest':S.set.auto.digest=!(S.set.auto.digest!==false);save();break;
+    case 'autoMode':
+      if(d.v==='clients'&&S.set.auto.mode!=='clients'&&!R.autoCc){R.autoCc=true;toast('Klepni na Klientům ještě jednou. Server začne klientům posílat skutečné e-maily.');setTimeout(function(){R.autoCc=false},5000);return}
+      R.autoCc=false;S.set.auto.mode=d.v;save();break;
+    case 'idkSetup':idkSetupSheet();return;
+    case 'idkSave':
+      var iid=$('idkId').value.trim(),isec=$('idkSecret').value.trim();
+      if(!iid||!isec){$('idkErr').textContent='Vyplň Client ID i Client Secret.';return}
+      S.set.idk.id=iid;S.set.idk.secret=isec;S.set.idk.err='';save();closeSheet();connectSheet();toast('Uloženo. Zkopíruj nový kód skriptu a nasaď ho.');return;
+    case 'idkSync':toast('Načítám faktury z iDokladu…');idkSync(true);return;
+    case 'idkAssign':idkAssignSheet();return;
+    case 'idkReassign':idkAssignSheet(d.n);return;
+    case 'idkAssignSave':
+      [].slice.call(document.querySelectorAll('#sheet select[data-p]')).forEach(function(sel){
+        var pid=sel.getAttribute('data-p');if(!sel.value)return;
+        S.set.idk.map[pid]=sel.value;
+        S.invoices.forEach(function(i){if(i.src==='idoklad'&&String(i.partnerId)===pid){i.cid=sel.value==='ignore'?'':sel.value;i.ignored=sel.value==='ignore'}});
+      });
+      save();closeSheet();toast('Přiřazení uloženo.');break;
+    case 'idkOff':
+      if(!R.idkOff){R.idkOff=true;toast('Klepni znovu pro odpojení iDokladu (faktury zůstanou).');setTimeout(function(){R.idkOff=false},4000);return}
+      R.idkOff=false;S.set.idk.id='';S.set.idk.secret='';S.set.idk.err='';save();toast('iDoklad odpojen. Aktualizuj kód skriptu, pokud chceš z něj údaje odstranit.');break;
     case 'smsNew':smsSheet(null,d.c);return;
     case 'smsOpen':smsSheet(d.id,null);return;
     case 'smsGo':
@@ -1206,16 +1425,16 @@ function act(a,el){
       try{var inv=buildInvoice(cl(R.draft.cid),R.draft.lines);S.invoices.push(inv);save();closeSheet();toast('Faktura '+inv.number+' vystavena ('+money(inv.total)+')');invOpen(inv.number)}catch(e){$('invErr').textContent=e.message;return}
       break;
     case 'invOpen':invOpen(d.n);return;
-    case 'invPrint':var iv=S.invoices.find(function(i){return i.number===d.n});$('print').innerHTML=invoiceFragment(iv);setTimeout(function(){window.print()},50);return;
+    case 'invPrint':var iv=invByKey(d.n);$('print').innerHTML=invoiceFragment(iv);setTimeout(function(){window.print()},50);return;
     case 'invShare':
-      var iv2=S.invoices.find(function(i){return i.number===d.n}),html='<!DOCTYPE html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Faktura '+iv2.number+'</title></head><body style="margin:0;background:#fff">'+invoiceFragment(iv2)+'</body></html>';
+      var iv2=invByKey(d.n),html='<!DOCTYPE html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Faktura '+iv2.number+'</title></head><body style="margin:0;background:#fff">'+invoiceFragment(iv2)+'</body></html>';
       try{var f=new File([html],'Faktura-'+iv2.number+'.html',{type:'text/html'});if(navigator.canShare&&navigator.canShare({files:[f]})){navigator.share({files:[f]}).catch(function(){});return}}catch(e){}
       toast('Sdílení souboru zde není dostupné. Použij tisk do PDF.');return;
     case 'invMail':
-      var iv3=S.invoices.find(function(i){return i.number===d.n});openMailto(iv3.email,'Faktura č. '+iv3.number,invoiceBody(iv3));
+      var iv3=invByKey(d.n);openMailto(iv3.email,'Faktura č. '+iv3.number,invoiceBody(iv3));
       if(iv3.status==='Vystaveno')iv3.status='Odesláno';iv3.sentAt=Date.now();save();closeSheet();toast('Otevřeno v Mailu, potvrď odeslání tam');break;
     case 'invPaid':
-      var iv4=S.invoices.find(function(i){return i.number===d.n});iv4.status=d.p==='1'?'Zaplaceno':(iv4.sentAt?'Odesláno':'Vystaveno');save();closeSheet();toast(d.p==='1'?'Označeno jako zaplacené':'Vráceno mezi nezaplacené');break;
+      var iv4=invByKey(d.n);iv4.status=d.p==='1'?'Zaplaceno':(iv4.sentAt?'Odesláno':'Vystaveno');save();closeSheet();toast(d.p==='1'?'Označeno jako zaplacené':'Vráceno mezi nezaplacené');break;
     case 'billSet':R.bs=JSON.parse(JSON.stringify(S.set.b));billSheet();return;
     case 'bvat':el.classList.toggle('on');R.bs.vat=el.classList.contains('on');return;
     case 'bqr':el.classList.toggle('on');R.bs.qr=el.classList.contains('on');return;
@@ -1258,15 +1477,17 @@ document.addEventListener('change',function(e){
   else if(f==='billing')c.billing=v;
   save();render();
 });
-document.addEventListener('visibilitychange',function(){if(!document.hidden){runAll();render();gcSync(false)}});
-setInterval(function(){if(document.hidden||$('sheet').innerHTML)return;if(S.set.cal.url){gcSync(false)}else{var n=runAll();if(n)render()}},300000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden){runAll();render();gcSync(false);autoSync(false)}});
+setInterval(function(){if(document.hidden||$('sheet').innerHTML)return;if(S.set.cal.url){gcSync(false);autoSync(false)}else{var n=runAll();if(n)render()}},300000);
 try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
 runAll();render();
 if(location.hash.indexOf('#gc=')===0){
-  try{var jd=JSON.parse(gcB64(location.hash.slice(4)));var rr=gcApply(jd);save();render();toast('Kalendář načten ('+rr.total+' událostí'+(rr.n?', zapsáno tréninků: '+rr.n:'')+')')}catch(ex){toast('Data z Googlu se nepodařilo přečíst.')}
+  try{var jd=JSON.parse(gcB64(location.hash.slice(4)));if(jd.invoices){var ri=idkApply(jd);save();render();toast('iDoklad: načteno faktur '+ri.total+', nových '+ri.added)}else{var rr=gcApply(jd);save();render();toast('Kalendář načten ('+rr.total+' událostí'+(rr.n?', zapsáno tréninků: '+rr.n:'')+')')}}catch(ex){toast('Data z Googlu se nepodařilo přečíst.')}
   try{history.replaceState(null,'',location.pathname+location.search)}catch(ex){}
 }
 gcSync(false);
+setTimeout(function(){autoSync(false)},3500);
+setTimeout(function(){var g=S.set.idk;if(g.id&&g.secret&&Date.now()-g.last>3600000)idkSync(false)},4000);
 if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){
   var hadCtl=!!navigator.serviceWorker.controller,reloaded=false;
   navigator.serviceWorker.addEventListener('controllerchange',function(){if(hadCtl&&!reloaded){reloaded=true;location.reload()}});
