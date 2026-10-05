@@ -514,7 +514,7 @@ function importIcs(text){
 
 /* ---------- Google Kalendář (automatické načítání) ---------- */
 function genToken(){var a=new Uint8Array(16);(window.crypto||window.msCrypto).getRandomValues(a);return Array.prototype.map.call(a,function(x){return ('0'+x.toString(16)).slice(-2)}).join('')}
-function bridgeCode(){
+function bridgeCode(withAuto){
   var g=S.set.cal;if(!g.token){g.token=genToken();save()}
   return ['// Tréninky: čtení Google Kalendáře (jen pro čtení)','const TOKEN = "'+g.token+'";','',
   'function my_(ev) {','  try { return String(ev.getMyStatus()); } catch (x) { return ""; }','}','',
@@ -524,7 +524,7 @@ function bridgeCode(){
   '    .map(function (ev) {','      return {','        myStatus: my_(ev),','        id: ev.getId() + "_" + ev.getStartTime().getTime(),','        title: ev.getTitle(),','        start: ev.getStartTime().getTime(),','        end: ev.getEndTime().getTime(),',
   '        guests: ev.getGuestList().map(function (g) {','          return { email: g.getEmail(), name: g.getName(), status: String(g.getGuestStatus()) };','        })','      };','    })',
   '    .filter(function (ev) { return ev.guests.length > 0; });','  return { ok: true, me: Session.getEffectiveUser().getEmail(), events: events };','}','',
-  'function doGet(e) {','  const p = (e && e.parameter) || {};','  const json = JSON.stringify(route_(p));',
+  'function doGet(e) {','  const p = (e && e.parameter) || {};','  const json = JSON.stringify('+(withAuto?'route_(p)':'data_(p)')+');',
   '  if (p.m === "frame" && /^[A-Za-z0-9_]+$/.test(p.i || "")) {',
   '    const safe = json.replace(/</g, "\\\\u003c");',
   '    return HtmlService.createHtmlOutput("<script>try{top.postMessage({gcFrame:\\"" + p.i + "\\",data:" + safe + "},\\"*\\")}catch(x){}<\\/script>")',
@@ -534,7 +534,7 @@ function bridgeCode(){
   '    return HtmlService.createHtmlOutput("<body style=\\"font-family:-apple-system,Arial,sans-serif;padding:28px;text-align:center\\"><h2>Kalendář je načtený</h2><p><a target=\\"_top\\" href=\\"" + link + "\\" style=\\"display:inline-block;background:#4338ca;color:#fff;padding:16px 28px;border-radius:14px;text-decoration:none;font-weight:600\\">Zpět do aplikace</a></p></body>")',
   '      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);','  }',
   '  if (p.cb && /^[A-Za-z0-9_]+$/.test(p.cb)) {','    return ContentService.createTextOutput(p.cb + "(" + json + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);','  }',
-  '  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);','}'].join('\n')+'\n\n'+autoServerCode();
+  '  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);','}'].join('\n')+(withAuto?'\n\n'+autoServerCode():'');
 }
 var GC_TIMEOUT=20000;
 function gcCheck(j){
@@ -582,7 +582,7 @@ function gcFetch(url,token,from,to,extra){
       if(e2&&e2.final)throw e2;note('skript',e2);
       return gcViaFrame(u).catch(function(e3){
         if(e3&&e3.final)throw e3;note('rámec',e3);
-        throw new Error('Spojení s Googlem se nepovedlo. ('+errs.join('; ')+')');
+        throw new Error('Spojení s Googlem se nepovedlo. ('+errs.join('; ')+') Klepni na Co dělat.');
       });
     });
   });
@@ -749,16 +749,25 @@ function ago(ms){if(!ms)return 'nikdy';var m=Math.round((Date.now()-ms)/60000);i
 function gcBanner(){
   var g=S.set.cal,h='';
   if(!g.url)return '<button class="banner" data-a="gcConnect"><div class="nm" style="font-size:16px">Propoj Google Kalendář</div><div class="sub">Tréninky se pak zapisují samy podle e-mailů pozvaných hostů.</div></button>';
-  h+='<div class="sub" style="margin:2px 0 6px">Google Kalendář: '+(g.err?'<span style="color:var(--red)">'+esc(g.err)+'</span>':'načteno '+ago(g.last))+'</div>';
+  h+='<div class="sub" style="margin:2px 0 6px">Google Kalendář: '+(g.err?'<span style="color:var(--red)">'+esc(g.err)+'</span> <button class="ic" style="font-size:13px" data-a="gcOpen">Zkontrolovat skript</button> <button class="ic" style="font-size:13px" data-a="gcHelp">Co dělat</button>':'načteno '+ago(g.last))+'</div>';
   var f=gcFound();
   if(f.length)h+='<button class="banner" data-a="guests"><div class="nm" style="font-size:16px">V kalendáři máš '+f.length+' '+(f.length===1?'hosta':(f.length<5?'hosty':'hostů'))+', kteří ještě nejsou klienti</div><div class="sub">Klepni a přidej je.</div></button>';
   return h;
 }
+function gcHelpSheet(){
+  openSheet('<h3>Skript neodpovídá, co dělat</h3><div class="sub" style="margin:0 4px 10px;line-height:1.5">Klepni na Zkontrolovat skript. Otevře se adresa skriptu a podle toho, co uvidíš, postupuj takto:</div><div class="card">'+
+   '<div class="kv" style="display:block"><b>Text začíná {"ok":true</b><div class="sub" style="line-height:1.5">Skript je v pořádku. Zkus v Nastavení Načíst záložním způsobem (otevře stránku Google).</div></div>'+
+   '<div class="kv" style="display:block"><b>Stránka o autorizaci, oprávnění nebo chybě</b><div class="sub" style="line-height:1.5">Na script.google.com otevři projekt, nahoře vyber funkci doGet, klepni na Spustit a povol všechna oprávnění. Potom Nasadit, Spravovat nasazení, tužka, Nová verze, Nasadit.</div></div>'+
+   '<div class="kv" style="display:block"><b>{"ok":false,"error":"token"}</b><div class="sub" style="line-height:1.5">Ve skriptu je jiné tajné heslo než v aplikaci. Zkopíruj kód z aplikace znovu a nahraď jím celý kód ve skriptu.</div></div>'+
+   '<div class="kv" style="display:block"><b>404, přihlášení nebo prázdná stránka</b><div class="sub" style="line-height:1.5">Adresa je špatná nebo nasazení nemá přístup Kdokoli a Spustit jako Já. Zkopíruj adresu z Nasadit, Spravovat nasazení znovu.</div></div></div>'+
+   '<button class="pri" data-a="gcOpen">Zkontrolovat skript</button><button class="ghost" data-a="closeSheet">Zavřít</button>');
+}
 function connectSheet(){
-  var g=S.set.cal,code=bridgeCode();
+  var g=S.set.cal,wa=!!(R.codeAuto||S.set.auto.on),code=bridgeCode(wa);
   openSheet('<h3>Propojit Google Kalendář</h3><div class="sub" style="margin:0 4px 10px;line-height:1.5">Stačí jednou, zabere to asi 3 minuty. Aplikace pak sama načítá události a podle e-mailů pozvaných hostů zapisuje tréninky klientům.</div>'+
+  (wa?'<div class="card"><div class="kv" style="display:block"><b>Tento kód obsahuje i automatiku</b><div class="sub" style="line-height:1.5">Navíc potřebuje oprávnění k Tabulkám, e-mailu a časovačům. Po vložení kódu vyber nahoře v editoru funkci doGet, klepni na Spustit a povol všechna oprávnění. Teprve pak nasaď novou verzi. Bez toho skript přestane odpovídat.</div></div></div>':'')+
   '<div class="card"><div class="kv" style="display:block"><b>1. Zkopíruj kód</b><div class="sub">Obsahuje tvé tajné heslo, takže ho nikomu neposílej.</div></div><button class="act" data-a="gcCopy">Zkopírovat kód</button></div>'+
-  '<div class="card"><div class="kv" style="display:block"><b>2. Vlož ho do Googlu</b><div class="sub" style="line-height:1.5">Otevři script.google.com (v Safari zvol Zobrazit web pro počítače), dej Nový projekt, smaž výchozí kód a vlož ten svůj. Potom Nasadit, Nové nasazení, typ Webová aplikace. Spustit jako: Já. Kdo má přístup: Kdokoli. Povol oprávnění pro kalendář.</div></div><a class="act" href="https://script.google.com/home/projects/create" target="_blank" rel="noopener" style="display:block;text-decoration:none">Otevřít script.google.com</a></div>'+
+  '<div class="card"><div class="kv" style="display:block"><b>2. Vlož ho do Googlu</b><div class="sub" style="line-height:1.5">Otevři script.google.com (v Safari zvol Zobrazit web pro počítače), dej Nový projekt, smaž výchozí kód a vlož ten svůj. Potom Nasadit, Nové nasazení, typ Webová aplikace. Spustit jako: Já. Kdo má přístup: Kdokoli. Povol oprávnění pro kalendář. Když kód jen nahrazuješ novým, dej Nasadit, Spravovat nasazení, tužka, Nová verze (ne Nové nasazení, změnila by se adresa).</div></div><a class="act" href="https://script.google.com/home/projects/create" target="_blank" rel="noopener" style="display:block;text-decoration:none">Otevřít script.google.com</a></div>'+
   '<div class="card"><div class="kv" style="display:block"><b>3. Vlož adresu sem</b><div class="sub">Adresa webové aplikace, končí na /exec.</div></div><div class="kv"><input type="text" id="gcUrl" placeholder="https://script.google.com/macros/s/…/exec" value="'+esc(g.url)+'" autocapitalize="off" autocomplete="off" style="text-align:left"></div></div>'+
   '<div class="err" id="gcErr"></div><button class="pri" data-a="gcDo">Připojit</button><button class="ghost" data-a="closeSheet">Zavřít</button>'+
   '<h2>Kód zobrazený ručně</h2><textarea class="big" id="gcCode" readonly style="font-family:ui-monospace,Menlo,monospace;font-size:11px;min-height:150px"></textarea>');
@@ -1015,14 +1024,14 @@ function settingsView(){
   else h+='<div class="kv sub">Barvy tohoto stylu jsou pevné. Barvu tlačítek a pozadí můžeš ladit ve stylu Čistý.</div>';
   h+='</div>';
   var g=S.set.cal;
-  h+='<h2>Google Kalendář</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(g.url&&!g.err?'ok':'wait')+'">'+(g.url?(g.err?'chyba':'připojeno'):'nepřipojeno')+'</span></div>'+(g.url?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(g.last)+'</span></div>'+(g.err?'<div class="kv sub" style="color:var(--red)">'+esc(g.err)+'</div>':'')+'<button class="act" data-a="gcNow">Načíst teď</button><button class="act" data-a="orph">Zkontrolovat zapsané tréninky s kalendářem</button><button class="act" data-a="gcPage">Načíst záložním způsobem (otevře stránku Google)</button><button class="act" data-a="gcConnect">Zobrazit postup a kód</button><button class="act del" data-a="gcOff">Odpojit</button>':'<button class="act" data-a="gcConnect">Připojit Google Kalendář</button>')+'</div>';
+  h+='<h2>Google Kalendář</h2><div class="card"><div class="kv"><span>Stav</span><span class="chip '+(g.url&&!g.err?'ok':'wait')+'">'+(g.url?(g.err?'chyba':'připojeno'):'nepřipojeno')+'</span></div>'+(g.url?'<div class="kv"><span>Poslední načtení</span><span class="sub">'+ago(g.last)+'</span></div>'+(g.err?'<div class="kv sub" style="color:var(--red)">'+esc(g.err)+'</div>':'')+'<button class="act" data-a="gcNow">Načíst teď</button>'+(S.set.cal.err?'<button class="act" data-a="gcOpen">Zkontrolovat skript</button><button class="act" data-a="gcHelp">Co dělat při chybě</button>':'')+'<button class="act" data-a="orph">Zkontrolovat zapsané tréninky s kalendářem</button><button class="act" data-a="gcPage">Načíst záložním způsobem (otevře stránku Google)</button><button class="act" data-a="gcConnect">Zobrazit postup a kód</button><button class="act del" data-a="gcOff">Odpojit</button>':'<button class="act" data-a="gcConnect">Připojit Google Kalendář</button>')+'</div>';
   var au=S.set.auto,mmode=[['off','Vypnuto','Jen zapisuje tréninky'],['me','Test','E-maily chodí jen tobě'],['clients','Klientům','Ostrý provoz']];
   h+='<h2>Automatika</h2><div class="card"><div class="kv"><span>Běh bez otevřené aplikace</span><span class="chip '+(au.on?(au.err?'bad':'ok'):'wait')+'">'+(au.on?(au.err?'chyba':'zapnuto'):'vypnuto')+'</span></div>'+
    (au.on?'<div class="kv"><span>Poslední běh serveru</span><span class="sub">'+ago(au.last)+'</span></div>'+(au.err?'<div class="kv sub" style="color:var(--red)">'+esc(au.err)+'</div>':'')+
    '<div class="kv" style="display:block"><div style="margin-bottom:12px">E-maily klientům posílá server <span class="sub">· '+mmode.filter(function(x){return x[0]===au.mode})[0][1]+'</span></div><div class="stg" style="grid-template-columns:repeat(3,1fr)">'+mmode.map(function(x){return '<button class="stb'+(au.mode===x[0]?' on':'')+'" data-a="autoMode" data-v="'+x[0]+'"><span>'+x[1]+'</span><span class="sub" style="font-weight:400;font-size:11px">'+x[2]+'</span></button>'}).join('')+'</div></div>'+
    '<div class="kv"><span>E-mail mi, když čeká SMS</span><button class="sw'+(au.digest!==false?' on':'')+'" data-a="autoDigest" aria-label="E-mail o SMS"></button></div>'+
-   '<button class="act" data-a="autoRun">Spustit server teď</button><button class="act" data-a="autoLog">Co automatika udělala</button><button class="act" data-a="gcConnect">Zobrazit kód skriptu</button><button class="act del" data-a="autoOff">Vypnout automatiku</button>'
-   :'<button class="act" data-a="autoOn">Zapnout automatiku</button><button class="act" data-a="gcConnect">Zobrazit kód skriptu</button>')+'</div><div class="sub" style="margin:0 16px 4px">Server v Googlu každou hodinu načte kalendář, zapíše tréninky, vyřeší zrušené a pošle e-maily. Na SMS pro klienty tě upozorní e-mailem. Aplikace převezme výsledek při dalším otevření. SMS klientům se pořád odesílá v aplikaci Zprávy. Vyžaduje nový kód skriptu.</div>';
+   '<button class="act" data-a="autoRun">Spustit server teď</button><button class="act" data-a="autoLog">Co automatika udělala</button><button class="act" data-a="autoCode">Zobrazit kód skriptu</button><button class="act del" data-a="autoOff">Vypnout automatiku</button>'
+   :'<button class="act" data-a="autoOn">Zapnout automatiku</button><button class="act" data-a="autoCode">Zobrazit kód skriptu</button>')+'</div><div class="sub" style="margin:0 16px 4px">Server v Googlu každou hodinu načte kalendář, zapíše tréninky, vyřeší zrušené a pošle e-maily. Na SMS pro klienty tě upozorní e-mailem. Aplikace převezme výsledek při dalším otevření. SMS klientům se pořád odesílá v aplikaci Zprávy. Vyžaduje nový kód skriptu.</div>';
   var nf=S.set.notify,chs=[['email','E-mail','Mail s hotovým textem'],['sms','SMS','Zprávy s hotovým textem'],['both','E-mail i SMS','Obojí současně'],['none','Nic','Bez upozornění']];
   h+='<h2>Upozornění klientům</h2><div class="card"><div class="kv"><span>E-mail po každém tréninku</span><button class="sw'+(nf.train!==false?' on':'')+'" data-a="trainMail" aria-label="E-mail po tréninku"></button></div><div class="kv" style="display:block"><div style="margin-bottom:12px">Když klientovi dojde balíček, poslat <span class="sub">· výchozí pro všechny</span></div><div class="stg">'+chs.map(function(x){return '<button class="stb'+(nf.out===x[0]?' on':'')+'" data-a="outCh" data-v="'+x[0]+'"><span>'+x[1]+'</span><span class="sub" style="font-weight:400">'+x[2]+'</span></button>'}).join('')+'</div></div></div>'+
   '<div class="sub" style="margin:0 16px 4px">U každého klienta můžeš kanál změnit (detail klienta, Upozornění při vyčerpání). E-maily čekají v záložce Zprávy a odešlou se přes Mail. SMS se připraví a odešlou přes Zprávy, iPhone neumí posílat potichu na pozadí. Telefon doplň v detailu klienta.</div>';
@@ -1033,7 +1042,7 @@ function settingsView(){
   h+='<h2>Klienti</h2><div class="card"><button class="act" data-a="arch">Archivovaní klienti ('+S.clients.filter(function(c){return !c.active}).length+')</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.13</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.14</div>';
   return h;
 }
 
@@ -1210,7 +1219,7 @@ function act(a,el){
     case 'sync':
       if(S.set.cal.url){toast('Načítám kalendář…');gcSync(true).then(function(r){if(r)toast((r.n?'Zapsáno nových tréninků: '+r.n:'Kalendář načten, nic nového')+(r.revoked?' · odebráno zrušených: '+r.revoked:''))});break}
       var n=runAll();toast(n?'Zapsáno nových tréninků: '+n:'Nic nového');break;
-    case 'gcConnect':connectSheet();return;
+    case 'gcConnect':R.codeAuto=false;connectSheet();return;
     case 'gcCopy':
       var ta0=$('gcCode');ta0.removeAttribute('readonly');ta0.focus();ta0.select();ta0.setSelectionRange(0,99999);
       var done0=function(){toast('Kód zkopírován')};
@@ -1225,6 +1234,9 @@ function act(a,el){
         return gcSync(true).then(function(r){if(r)toast('Načteno událostí: '+r.total+(r.n?', zapsáno tréninků: '+r.n:'')+(r.revoked?', odebráno zrušených: '+r.revoked:''));var f=gcFound();if(f.length)guestsSheet()});
       }).catch(function(e){var el=$('gcErr');if(el){el.innerHTML=esc(e.message)+'<br><button class="pri" style="margin-top:10px" data-a="gcPage">Zkusit záložní způsob (otevře stránku Google)</button>'}});return;
     case 'gcPage':var gu=$('gcUrl');gcPage(gu?gu.value.trim():'');return;
+    case 'autoCode':R.codeAuto=true;connectSheet();return;
+    case 'gcOpen':if(S.set.cal.url){window.open(S.set.cal.url+(S.set.cal.url.indexOf('?')<0?'?':'&')+'t='+encodeURIComponent(S.set.cal.token),'_blank')}return;
+    case 'gcHelp':gcHelpSheet();return;
     case 'gcNow':toast('Načítám kalendář…');gcSync(true).then(function(r){if(r)toast((r.n?'Zapsáno nových tréninků: '+r.n:'Kalendář načten, nic nového')+(r.revoked?' · odebráno zrušených: '+r.revoked:''))});return;
     case 'gcOff':
       if(!R.gcOff){R.gcOff=true;toast('Klepni znovu pro odpojení');setTimeout(function(){R.gcOff=false},4000);return}
