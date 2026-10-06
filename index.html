@@ -583,9 +583,9 @@ function bridgeCode(){
   'function data_(p) {','  if (p.t !== TOKEN) return { ok: false, error: "token" };',
   '  const from = Number(p.from) || Date.now() - 120 * 864e5;','  const to = Number(p.to) || Date.now() + 60 * 864e5;',
   '  const events = CalendarApp.getDefaultCalendar().getEvents(new Date(from), new Date(to))','    .filter(function (ev) { return !ev.isAllDayEvent(); })',
-  '    .map(function (ev) {','      return {','        myStatus: my_(ev),','        id: ev.getId() + "_" + ev.getStartTime().getTime(),','        title: ev.getTitle(),','        start: ev.getStartTime().getTime(),','        end: ev.getEndTime().getTime(),',
-  '        guests: ev.getGuestList().map(function (g) {','          return { email: g.getEmail(), name: g.getName(), status: String(g.getGuestStatus()) };','        })','      };','    })',
-  '    .filter(function (ev) { return ev.guests.length > 0; });','  return { ok: true, me: Session.getEffectiveUser().getEmail(), events: events };','}','',
+  '    .map(function (ev) {','      const gl = ev.getGuestList();','      if (!gl.length) return null;','      return {','        myStatus: my_(ev),','        id: ev.getId() + "_" + ev.getStartTime().getTime(),','        title: ev.getTitle(),','        start: ev.getStartTime().getTime(),','        end: ev.getEndTime().getTime(),',
+  '        guests: gl.map(function (g) {','          return { email: g.getEmail(), name: g.getName(), status: String(g.getGuestStatus()) };','        })','      };','    })',
+  '    .filter(function (ev) { return ev !== null; });','  return { ok: true, me: Session.getEffectiveUser().getEmail(), events: events };','}','',
   '// Spusť jednou v editoru (Spustit) a povol oprávnění ke kalendáři.','function povolit() { return CalendarApp.getDefaultCalendar().getName(); }','',
   'function doGet(e) {','  const p = (e && e.parameter) || {};','  const json = JSON.stringify(data_(p));',
   '  if (p.m === "frame" && /^[A-Za-z0-9_]+$/.test(p.i || "")) {',
@@ -599,7 +599,7 @@ function bridgeCode(){
   '  if (p.cb && /^[A-Za-z0-9_]+$/.test(p.cb)) {','    return ContentService.createTextOutput(p.cb + "(" + json + ")").setMimeType(ContentService.MimeType.JAVASCRIPT);','  }',
   '  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);','}'].join('\n');
 }
-var GC_TIMEOUT=20000;
+var GC_TIMEOUT=50000;
 function gcCheck(j){
   if(!j||j.ok!==true){var e=new Error(j&&j.error==='token'?'Špatný token. Zkopíruj kód z aplikace znovu a nasaď novou verzi.':'Odpověď není z tvého skriptu.');e.final=true;throw e}
   return j;
@@ -628,7 +628,7 @@ function gcViaFrame(u){
     function end(){done=true;clearTimeout(t);window.removeEventListener('message',onMsg);if(fr.parentNode)fr.parentNode.removeChild(fr)}
     function onMsg(e){var d=e.data;if(done||!d||d.gcFrame!==id)return;end();try{res(gcCheck(d.data))}catch(x){rej(x)}}
     window.addEventListener('message',onMsg);
-    t=setTimeout(function(){if(done)return;end();rej(new Error('bez odpovědi z rámu'))},Math.min(GC_TIMEOUT,12000));
+    t=setTimeout(function(){if(done)return;end();rej(new Error('bez odpovědi z rámu'))},GC_TIMEOUT);
     fr.style.cssText='position:absolute;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
     fr.setAttribute('aria-hidden','true');
     fr.src=u+'&m=frame&i='+id;
@@ -695,6 +695,17 @@ function gcApply(j){
   g.me=me;g.last=Date.now();g.err='';
   var n=runAll();
   return {n:n,total:evs.length-canc.length,revoked:revoked,cancelled:canc.length};
+}
+/* Dlouhé období se načítá po částech (každá je rychlá), aby skript nepřekročil časový limit. */
+function gcFetchAll(url,token,from,to){
+  var step=30*DAY,parts=[],a=from;while(a<to){parts.push([a,Math.min(a+step,to)]);a+=step}
+  var out={ok:true,me:'',events:[]},seen={};
+  return parts.reduce(function(p,r){return p.then(function(){
+    return gcFetch(url,token,r[0],r[1]).then(function(j){
+      out.me=out.me||j.me;
+      (j.events||[]).forEach(function(e){if(!seen[e.id]){seen[e.id]=1;out.events.push(e)}});
+    });
+  })},Promise.resolve()).then(function(){return out});
 }
 function gcSync(manual){
   var g=S.set.cal;if(!g.url||!g.token||gcBusy)return Promise.resolve(null);
@@ -1050,7 +1061,7 @@ function settingsView(){
   h+='<h2>Klienti</h2><div class="card"><button class="act" data-a="arch">Archivovaní klienti ('+S.clients.filter(function(c){return !c.active}).length+')</button></div>';
   h+='<h2>Záloha</h2><div class="card"><button class="act" data-a="backup">Zálohovat data</button><button class="act" data-a="restore">Obnovit ze zálohy</button></div><div class="sub" style="margin:0 16px">Zálohu si udělej pravidelně a ulož ji do Souborů nebo iCloudu. Smazání dat prohlížeče nebo aplikace by jinak smazalo i evidenci.</div>';
   h+='<h2>Data</h2><div class="card"><button class="act" data-a="sample">Načíst ukázková data</button><button class="act del" data-a="wipe">Smazat vše</button></div>';
-  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.19</div>';
+  h+='<div class="sub" style="text-align:center;margin:26px 0 8px">Tréninky 1.20</div>';
   return h;
 }
 
