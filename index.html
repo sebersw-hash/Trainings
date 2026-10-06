@@ -628,7 +628,7 @@ function gcViaFrame(u){
     function end(){done=true;clearTimeout(t);window.removeEventListener('message',onMsg);if(fr.parentNode)fr.parentNode.removeChild(fr)}
     function onMsg(e){var d=e.data;if(done||!d||d.gcFrame!==id)return;end();try{res(gcCheck(d.data))}catch(x){rej(x)}}
     window.addEventListener('message',onMsg);
-    t=setTimeout(function(){if(done)return;end();rej(new Error('bez odpovědi z rámu'))},GC_TIMEOUT);
+    t=setTimeout(function(){if(done)return;end();rej(new Error('bez odpovědi z rámu'))},Math.min(GC_TIMEOUT,30000));
     fr.style.cssText='position:absolute;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
     fr.setAttribute('aria-hidden','true');
     fr.src=u+'&m=frame&i='+id;
@@ -711,7 +711,7 @@ function gcSync(manual){
   var g=S.set.cal;if(!g.url||!g.token||gcBusy)return Promise.resolve(null);
   gcBusy=true;
   var now=Date.now();
-  return gcFetch(g.url,g.token,now-120*DAY,now+60*DAY).then(gcApply).catch(function(e){g.err=e.message||'Nepodařilo se načíst kalendář.';save();if(manual)toast(g.err);return null})
+  return gcFetchAll(g.url,g.token,now-120*DAY,now+60*DAY).then(gcApply).catch(function(e){g.err=e.message||'Nepodařilo se načíst kalendář.';save();if(manual)toast(g.err);return null})
    .then(function(res){gcBusy=false;render();if(res&&res.revoked)toast('Odebráno tréninků (zrušené nebo odmítnuté): '+res.revoked);return res});
 }
 /* Hosté z Google Kalendáře, kteří ještě nejsou klienti. */
@@ -1248,7 +1248,7 @@ function act(a,el){
       var url=$('gcUrl').value.trim();$('gcErr').textContent='';
       if(!/^https:\/\/script\.google(usercontent)?\.com\/.+/.test(url)){$('gcErr').textContent='Adresa musí začínat https://script.google.com/macros/…';return}
       $('gcErr').textContent='Zkouším spojení…';
-      gcFetch(url,S.set.cal.token,Date.now()-120*DAY,Date.now()+60*DAY).then(function(){
+      gcFetch(url,S.set.cal.token,Date.now()-3*DAY,Date.now()+3*DAY).then(function(){
         S.set.cal.url=url;S.set.cal.err='';save();closeSheet();toast('Připojeno, načítám tréninky…');
         return gcSync(true).then(function(r){if(r)toast('Načteno událostí: '+r.total+(r.n?', zapsáno tréninků: '+r.n:'')+(r.revoked?', odebráno zrušených: '+r.revoked:''));var f=gcFound();if(f.length)guestsSheet()});
       }).catch(function(e){var el=$('gcErr');if(el){el.innerHTML=esc(e.message)+'<br><button class="pri" style="margin-top:10px" data-a="gcPage">Zkusit záložní způsob (otevře stránku Google)</button>'}});return;
